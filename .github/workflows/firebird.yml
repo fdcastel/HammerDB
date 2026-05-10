@@ -74,3 +74,68 @@ jobs:
           if (-not $found) { throw 'Firebird ODBC driver not found in registry after choco install' }
           Write-Host "Registered Firebird ODBC driver: $found"
           "FIREBIRD_ODBC_DRIVER=$found" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install Tcl/Tk (Magicsplat) for tdbc::odbc smoke test
+        shell: pwsh
+        run: |
+          choco install magicsplat-tcl-tk -y --no-progress
+          # Magicsplat installs to C:\Tcl by default
+          $tclshCandidates = @(
+            'C:\Tcl\bin\tclsh.exe',
+            'C:\Tcl\bin\tclsh90.exe',
+            'C:\Tcl\bin\tclsh86.exe'
+          )
+          $tclsh = $tclshCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $tclsh) { throw "tclsh.exe not found after magicsplat-tcl-tk install" }
+          Write-Host "tclsh: $tclsh"
+          "TCLSH=$tclsh" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "C:\Tcl\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      # ---------------------------------------------------------------------
+      # Embedded-mode ODBC connection string template (canonical, used by
+      # src/firebird/fboltp.tcl, fbolap.tcl, fbotc.tcl in later phases):
+      #
+      #   Driver={Firebird/InterBase(r) driver};
+      #   Dbname=<absolute path to .fdb>;
+      #   Client=fbclient.dll;
+      #   User=SYSDBA;
+      #
+      # Embedded mode has no host/port. SYSDBA is the implicit owner of any
+      # newly-created file; no password is required when fbclient.dll loads
+      # the engine in-process. The server-mode legacy form
+      # (Servername=localhost) MUST NOT be used.
+      # ---------------------------------------------------------------------
+      - name: Smoke test - create embedded .fdb and run tdbc::odbc query
+        shell: pwsh
+        run: |
+          $fbDb = Join-Path $env:RUNNER_TEMP 'firebird\smoke.fdb'
+          if (Test-Path $fbDb) { Remove-Item $fbDb -Force }
+          Import-Module PSFirebird
+          New-FirebirdDatabase -Path $fbDb -User SYSDBA
+          if (-not (Test-Path $fbDb)) { throw "Failed to create embedded database at $fbDb" }
+          Write-Host "Created embedded database: $fbDb ($((Get-Item $fbDb).Length) bytes)"
+
+          $tclScript = Join-Path $env:RUNNER_TEMP 'fb_smoke.tcl'
+          $driverName = $env:FIREBIRD_ODBC_DRIVER
+          $dbnameForTcl = $fbDb -replace '\\', '/'
+          $template = @'
+package require tdbc::odbc
+set conn [tdbc::odbc::connection new "Driver={__DRIVER__};Dbname=__DBNAME__;Client=fbclient.dll;User=SYSDBA;"]
+set stmt [$conn prepare {SELECT 1 AS one FROM RDB$DATABASE}]
+$stmt foreach row {
+    puts "row: $row"
+    if {[dict get $row one] ne "1"} { exit 2 }
+}
+$stmt close
+$conn close
+puts "OK"
+'@
+          $template = $template.Replace('__DRIVER__', $driverName).Replace('__DBNAME__', $dbnameForTcl)
+          Set-Content -Path $tclScript -Value $template -Encoding ASCII
+
+          Write-Host "--- Tcl smoke script ---"
+          Get-Content $tclScript
+          Write-Host "------------------------"
+
+          & $env:TCLSH $tclScript
+          if ($LASTEXITCODE -ne 0) { throw "tdbc::odbc smoke test failed with exit $LASTEXITCODE" }
