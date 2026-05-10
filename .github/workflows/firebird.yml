@@ -36,3 +36,41 @@ jobs:
           $PSVersionTable
           choco --version
           Get-ComputerInfo | Select-Object OsName, OsVersion, OsArchitecture
+
+      - name: Install PSFirebird module
+        shell: pwsh
+        run: |
+          Install-Module -Name PSFirebird -Force -Scope CurrentUser -AllowClobber
+          Get-Module -ListAvailable PSFirebird | Select-Object Name, Version, Path
+
+      - name: Provision Firebird 5.0.x Embedded
+        shell: pwsh
+        run: |
+          $fbDir = Join-Path $env:RUNNER_TEMP 'firebird'
+          Import-Module PSFirebird
+          New-FirebirdEnvironment -Version 5.0.3 -Path $fbDir
+          Get-ChildItem $fbDir | Select-Object Name, Length
+          # Expose fbclient.dll on PATH for the rest of the workflow
+          "$fbDir" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "FIREBIRD_HOME=$fbDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install Firebird ODBC driver
+        shell: pwsh
+        run: |
+          choco install firebird-odbc -y --no-progress
+          # Locate the registered driver name (32- or 64-bit hive) for downstream steps
+          $hives = @(
+            'HKLM:\SOFTWARE\ODBC\ODBCINST.INI\ODBC Drivers',
+            'HKLM:\SOFTWARE\WOW6432Node\ODBC\ODBCINST.INI\ODBC Drivers'
+          )
+          $found = $null
+          foreach ($h in $hives) {
+            if (Test-Path $h) {
+              $props = Get-ItemProperty $h
+              $name = $props.PSObject.Properties.Name | Where-Object { $_ -match 'Firebird' } | Select-Object -First 1
+              if ($name) { $found = $name; break }
+            }
+          }
+          if (-not $found) { throw 'Firebird ODBC driver not found in registry after choco install' }
+          Write-Host "Registered Firebird ODBC driver: $found"
+          "FIREBIRD_ODBC_DRIVER=$found" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
