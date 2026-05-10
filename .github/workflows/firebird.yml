@@ -151,3 +151,11 @@ jobs:
         run: |
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_register.tcl"
           if ($LASTEXITCODE -ne 0) { throw "Firebird registration check failed with exit $LASTEXITCODE" }
+
+      - name: Source-load all src/firebird/*.tcl modules
+        shell: pwsh
+        env:
+          HAMMERDB_ROOT: ${{ github.workspace }}
+        run: |
+          & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_modules.tcl"
+          if ($LASTEXITCODE -ne 0) { throw "Firebird module load failed with exit $LASTEXITCODE" }
