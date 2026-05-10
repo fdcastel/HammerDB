@@ -53,9 +53,9 @@ This is a living tracker. **Update it every time work moves forward** — do not
 
 | # | Status | Commit | Task | Notes / Files |
 |---|---|---|---|---|
-| B1 | 🔧 IN PROGRESS |  | Add `<firebird>` block to [config/database.xml](config/database.xml) | Fields: `name=Firebird`, `description=Firebird`, `prefix=fb`, `library=tdbc::odbc 1.1.1`, `workloads=TPROC-C TPROC-H`, `commands=odbc execute paramtype prepare connection allrows` (mirror MSSQL's command list). |
-| B2 | 🔧 IN PROGRESS |  | Create [config/firebird.xml](config/firebird.xml) with `<connection>`, `<tpcc>`, and `<tpch>` blocks | Template: copy [config/postgresql.xml](config/postgresql.xml) and rename `pg_*` → `fb_*`. Defaults: `fb_host=localhost`, `fb_port=3050`, `fb_dbase=tpcc.fdb`, `fb_user=SYSDBA`, `fb_pass=masterkey`, `fb_storedprocs=true`. `<connection>` adds `fb_odbc_driver` (default `Firebird ODBC Driver`), `fb_embedded` (default `true`). |
-| B3 | 🔧 IN PROGRESS |  | Confirm GUI/CLI auto-discovery picks up Firebird without bootstrap edits | Workflow step runs `.github/workflows/scripts/fb_register.tcl` which loads `config/database.xml` and `config/firebird.xml` via HammerDB's own `::XML::To_Dict` (the same parser used by `geninit.tcl`/`geninitcli.tcl`) and asserts the `firebird` key is present with the expected fields. GUI radio-button check is part of G1. |
+| B1 | ✅ DONE | 56a02d3 | Add `<firebird>` block to [config/database.xml](config/database.xml) | name=Firebird, prefix=fb, library=tdbc::odbc 1.1.1, workloads=TPROC-C TPROC-H, commands list mirrors MSSQL. |
+| B2 | ✅ DONE | 56a02d3 | Create [config/firebird.xml](config/firebird.xml) with `<connection>`, `<tpcc>`, and `<tpch>` blocks | Modelled on postgresql.xml. Connection block adds `fb_odbc_driver` (default `Firebird ODBC Driver`) and `fb_embedded` (default `true`). |
+| B3 | ✅ DONE | 30f2329 | Confirm GUI/CLI auto-discovery picks up Firebird without bootstrap edits | `.github/workflows/scripts/fb_register.tcl` runs in CI, loads both XMLs via `::XML::To_Dict` (same parser as `geninit.tcl`), asserts the `firebird` key + required sections/fields. GUI radio-button visual check still pending in G1. |
 
 ## Phase C — Core Tcl modules (`src/firebird/`)
 
