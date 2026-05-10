@@ -1,0 +1,126 @@
+# THE_PLAN — Add Firebird Database Support to HammerDB
+
+## How to use this document
+
+This is a living tracker. **Update it every time work moves forward** — do not let it drift.
+
+- **Each commit** that touches a task: edit that task's row to set `Status` and paste the **short** commit hash (`git log -1 --format=%h`) into the `Commit` column.
+- **Starting a task:** flip its `Status` to 🔧 IN PROGRESS so parallel workers don't collide.
+- **Blocked by another task:** flip to ⏯️ DEFERRED and add a `blocked-by:` note in `Notes / Files`.
+- **Discovering new work:** add a new row at the end of the relevant phase rather than rewriting existing IDs (IDs are stable references in commit messages and PR descriptions).
+- **At the end of every working session:** re-read this file top-to-bottom, fix stale statuses, and commit the doc update with message `docs(plan): update Firebird plan status`.
+- **PR convention:** include the task ID(s) in the PR title (e.g. `Firebird C5/C6: TPROC-C schema build`) so the `Commit` column is easy to populate from `git log --grep`.
+
+### Status legend
+
+| Symbol | Meaning |
+| --- | --- |
+| ✅ DONE | Implemented, reviewed, and tested |
+| 🔧 IN PROGRESS | Partially implemented or actively underway |
+| ❌ OPEN | Not yet addressed |
+| ⏯️ DEFERRED | Delayed or on hold (note the blocker in `Notes / Files`) |
+
+### Locked decisions (do not relitigate without updating this header)
+
+- **Tcl driver:** `tdbc::odbc` against the official Firebird ODBC driver. No new C extension. Mirror MSSQL's pattern in `src/mssqls/`.
+- **Workloads:** TPROC-C **and** TPROC-H from day one.
+- **TPC-C transaction implementation:** PSQL stored procedures by default, client-side prepared-statement fallback. Toggle via `fb_storedprocs` (mirrors PostgreSQL's `pg_storedprocs`).
+- **Database prefix:** `fb` (e.g. `fboltp.tcl`, `fb_tprocc_run.tcl`, `fb_count_ware`).
+- **Target Firebird version:** 5.0.x (current stable, ODS 13.1).
+- **Extras in scope:** Python mirror scripts; CI pipeline + Docker. **Out of scope:** metrics module (`fbmet.tcl`) — see Phase H.
+- **Execution policy (project-wide):** No local runs. Every command — schema build, workload run, Docker build, GUI smoke check, parity comparison — executes on a GitHub Actions runner via the workflow scaffolded in A1. Local checkouts are for editing only.
+
+---
+
+## Phase A — Driver prerequisites (GitHub Actions only)
+
+> **Execution policy:** No local runs. Every command in every phase must execute on a GitHub Actions runner. Local machines are for editing and reading code only. Phases F (Docker), G (smoke validation), and the per-task smoke checks in C/D/E all inherit this constraint and run via the workflow scaffolded in A1.
+>
+> **Firebird mode:** Use Firebird **Embedded** — no service install, no listener, no SYSDBA password to manage. The benchmark process loads `fbclient.dll` / `libfbclient.so` and opens the database file directly.
+>
+> **Tooling:** [PSFirebird](https://github.com/fdcastel/PSFirebird) (`Install-Module PSFirebird` from the PowerShell Gallery, requires PS 7.4+) provisions the Firebird binaries via `New-FirebirdEnvironment`. The Firebird ODBC driver comes from Chocolatey (`choco install firebird-odbc -y`).
+
+| # | Status | Commit | Task | Notes / Files |
+|---|---|---|---|---|
+| A1 | ❌ OPEN |  | Add `.github/workflows/firebird.yml` with a `windows-latest` job and the standard "checkout + setup-tcl + run script" steps | Triggers: `workflow_dispatch` plus `pull_request` paths-filtered to `src/firebird/**`, `scripts/**/firebird/**`, `config/firebird.xml`, `config/database.xml`, `config/ci.xml`, `Docker/firebird/**`, `tmp/THE_PLAN.md`. Use `pwsh` shell. Set `env: GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}` so PSFirebird's GitHub release downloads aren't rate-limited. |
+| A2 | ❌ OPEN |  | In the workflow, install PSFirebird and provision Firebird 5.0.x Embedded into the runner workspace | Steps: `Install-Module PSFirebird -Force -Scope CurrentUser`; `New-FirebirdEnvironment -Version 5.0.3 -Path $env:RUNNER_TEMP\firebird`. Resulting `fbclient.dll` path must be on `PATH` (or `$env:Path += ";$env:RUNNER_TEMP\firebird"`) so the ODBC driver and `tdbc::odbc` can load it. |
+| A3 | ❌ OPEN |  | In the workflow, install the Firebird ODBC driver via Chocolatey | Step: `choco install firebird-odbc -y --no-progress`. Confirm the driver registers as `Firebird/InterBase(r) driver` in `HKLM:\SOFTWARE\ODBC\ODBCINST.INI\ODBC Drivers` (or the WoW64 hive). Capture the exact registered driver name into a workflow output for use by A5. |
+| A4 | ❌ OPEN |  | Workflow step: create a scratch embedded database with `New-FirebirdDatabase` and run a `tdbc::odbc` smoke query | One-shot tcl: `package require tdbc::odbc; tdbc::odbc::connection create db "Driver=Firebird/InterBase(r) driver;Dbname=$env:RUNNER_TEMP\firebird\smoke.fdb;Client=fbclient.dll;..."; db allrows {SELECT 1 FROM RDB$DATABASE}`. Runner must print `1` and exit 0. This is the gating check — every later workflow run depends on A4 still passing. |
+| A5 | ❌ OPEN |  | Document the canonical embedded-mode ODBC connection-string template that `fboltp.tcl`, `fbolap.tcl`, `fbotc.tcl` will use | Embedded mode has no host/port — the connection string is `Driver={...};Dbname={absolute-path-to-.fdb};Client=fbclient.dll;User=SYSDBA;` (SYSDBA is implicit owner in embedded mode, no password needed). Pick a single template, paste it verbatim into the file header comment of `fboltp.tcl` so future contributors don't reinvent it. Update `config/firebird.xml` defaults (Phase B2) so `fb_host`/`fb_port` are optional/ignored. |
+| A6 | ❌ OPEN |  | Cache the PSFirebird-downloaded Firebird binaries between workflow runs | `actions/cache@v4` keyed on `firebird-5.0.3-${{ runner.os }}`. Halves the cold-start time of every CI run. Skip if cache misses are <30s in practice. |
+
+## Phase B — Registration & defaults
+
+| # | Status | Commit | Task | Notes / Files |
+|---|---|---|---|---|
+| B1 | ❌ OPEN |  | Add `<firebird>` block to [config/database.xml](config/database.xml) | Fields: `name=Firebird`, `description=Firebird`, `prefix=fb`, `library=tdbc::odbc 1.1.1`, `workloads=TPROC-C TPROC-H`, `commands=odbc execute paramtype prepare connection allrows` (mirror MSSQL's command list). |
+| B2 | ❌ OPEN |  | Create [config/firebird.xml](config/firebird.xml) with `<connection>`, `<tpcc>`, and `<tpch>` blocks | Template: copy [config/postgresql.xml](config/postgresql.xml) and rename `pg_*` → `fb_*`. Defaults: `fb_host=localhost`, `fb_port=3050`, `fb_dbase=tpcc.fdb`, `fb_user=SYSDBA`, `fb_pass=masterkey`, `fb_storedprocs=true`. Both `<tpcc>` and `<tpch>` sections required. |
+| B3 | ❌ OPEN |  | Confirm GUI/CLI auto-discovery picks up Firebird without bootstrap edits | `src/generic/geninit.tcl` and `src/generic/geninitcli.tcl` enumerate from `database.xml`. Launch `./hammerdb` GUI → the Firebird radio button should appear in the tree. No code change expected; if missing, debug the dict load. |
+
+## Phase C — Core Tcl modules (`src/firebird/`)
+
+| # | Status | Commit | Task | Notes / Files |
+|---|---|---|---|---|
+| C1 | ❌ OPEN |  | Create `src/firebird/fbopt.tcl` (options dialog) | Mirror [src/postgresql/pgopt.tcl](src/postgresql/pgopt.tcl). Connection tab (host/port/db/user/pass), TPROC-C schema tab (`fb_count_ware`, `fb_num_vu`, `fb_storedprocs`, …), TPROC-C driver tab, TPROC-H schema/driver tabs. |
+| C2 | ❌ OPEN |  | Create `src/firebird/fboltp.tcl` skeleton with `ConnectToFirebird` helper | Use `tdbc::odbc::connection create` with the connection string template from A4. Centralise so every TPROC-C entry point shares it. |
+| C3 | ❌ OPEN |  | TPROC-C schema DDL: `CREATE TABLE` for WAREHOUSE, DISTRICT, CUSTOMER, ITEM, STOCK, ORDERS, ORDER_LINE, NEW_ORDER, HISTORY | Use `GENERATED BY DEFAULT AS IDENTITY` for synthetic keys. NUMERIC precision: `NUMERIC(12,2)` for money columns. Add primary keys + indexes per TPC-C spec. |
+| C4 | ❌ OPEN |  | TPROC-C schema bulk-load procs (no COPY/BCP available) | Pattern: prepared INSERT inside a transaction, batch ~1000 rows, commit, repeat. Reference MSSQL/Oracle drivers, **not** PostgreSQL (which uses COPY). Optional fast path: deactivate indexes during load, reactivate at end. |
+| C5 | ❌ OPEN |  | TPROC-C PSQL stored procedures: `NEWORD`, `PAYMENT`, `DELIVERY`, `OSTAT`, `SLEV` | `CREATE OR ALTER PROCEDURE … AS BEGIN … END`. Use `EXCEPTION WHEN …` for handled errors. Reference [src/postgresql/pgoltp.tcl](src/postgresql/pgoltp.tcl) lines 47–200 for the canonical procedure bodies — translate PL/pgSQL → Firebird PSQL. |
+| C6 | ❌ OPEN |  | TPROC-C client-side prepared statements (fallback when `fb_storedprocs=false`) | Five `proc neword/payment/delivery/ostat/slev` Tcl procs that issue parameterised SQL via `tdbc::odbc` `prepare` + `execute`. Mirror PostgreSQL's `fn_prep_statement`. |
+| C7 | ❌ OPEN |  | TPROC-C driver loop with virtual users, key/think time, mix ratios | Reuse [modules/tpcccommon-1.0.tm](modules/tpcccommon-1.0.tm) (`RandomNumber`, `NURand`, `Lastname`, `keytime`, `thinktime`). Mix: 45% NewOrder / 43% Payment / 4% Delivery / 4% OrderStatus / 4% StockLevel via `RandomNumber 1 23` switch. |
+| C8 | ❌ OPEN |  | Update-conflict retry logic for MVCC | Wrap each transaction in a retry loop that catches Firebird `isc_update_conflict` (SQLSTATE `40001` family). Mirror PostgreSQL's serialisation-failure handling in pgoltp.tcl. Cap retries (e.g. 5) before raising. |
+| C9 | ❌ OPEN |  | Create `src/firebird/fbolap.tcl` skeleton + TPROC-H schema build | Tables: REGION, NATION, SUPPLIER, CUSTOMER, PART, PARTSUPP, ORDERS, LINEITEM. Bulk load via batched INSERTs (same pattern as C4). |
+| C10 | ❌ OPEN |  | TPROC-H queries 1–22 in Firebird SQL dialect | Source SQL: [src/postgresql/pgolap.tcl](src/postgresql/pgolap.tcl) `set sql(N)` blocks. Adapt: window functions OK (FB 3+), recursive CTE OK, `EXTRACT` OK, `INTERVAL` syntax differs. Q15 = view+select multi-statement (split on `;`). |
+| C11 | ❌ OPEN |  | TPROC-H driver: query stream, refresh streams (RF1 inserts / RF2 deletes) | Mirror PostgreSQL `pgolap.tcl` driver structure. Use `tpchcommon-1.0.tm` for parameter substitution. |
+| C12 | ❌ OPEN |  | Create `src/firebird/fbotc.tcl` (other test category) | Small workload entry point. Mirror [src/postgresql/pgotc.tcl](src/postgresql/pgotc.tcl). Lowest priority of the C-phase items. |
+| C13 | ❌ OPEN |  | Create `src/firebird/fbci.tcl` (CI/pipeline integration) | Mirror [src/postgresql/pgci.tcl](src/postgresql/pgci.tcl). Hooks for the Firebird ci.xml block (Phase F). |
+
+## Phase D — Tcl test scripts (`scripts/tcl/firebird/`)
+
+For both TPROC-C and TPROC-H, mirror the 10-file PostgreSQL set: `*_buildschema.tcl`, `*_checkschema.tcl`, `*_deleteschema.tcl`, `*_run.tcl`, `*_run_profile.tcl`, `*_result.tcl`, `*_profile.sh`, `*_single.sh`, `*.sh`, `*.ps1`. Naming: `fb_tprocc_buildschema.tcl`, etc.
+
+| # | Status | Commit | Task | Notes / Files |
+|---|---|---|---|---|
+| D1 | ❌ OPEN |  | `scripts/tcl/firebird/tprocc/` — 10 files | Template: [scripts/tcl/postgres/tprocc/](scripts/tcl/postgres/tprocc/). Replace `pg_*` settings with `fb_*` from `firebird.xml`. |
+| D2 | ❌ OPEN |  | `scripts/tcl/firebird/tproch/` — equivalent file set | Template: [scripts/tcl/postgres/tproch/](scripts/tcl/postgres/tproch/). |
+| D3 | ❌ OPEN |  | Add a workflow job that smoke-runs each script via `./hammerdbcli auto <script>` on the CI runner | Runs after A1–A4 succeed. 1-warehouse TPROC-C / scale-1 TPROC-H against an embedded `.fdb` provisioned by `New-FirebirdDatabase`. Each script must parse, connect, and exit 0. Failures fail the workflow. |
+
+## Phase E — Python parallel scripts (`scripts/python/firebird/`)
+
+| # | Status | Commit | Task | Notes / Files |
+|---|---|---|---|---|
+| E1 | ❌ OPEN |  | `scripts/python/firebird/tprocc/` — `.py` files mirroring D1 | Template: [scripts/python/postgres/tprocc/](scripts/python/postgres/tprocc/). 7 `.py` + 3 shell wrappers (`*_py.sh`, `*_py.ps1`, `*_single_py.sh`, `*_profile_py.sh`). |
+| E2 | ❌ OPEN |  | `scripts/python/firebird/tproch/` — equivalent set | Template: [scripts/python/postgres/tproch/](scripts/python/postgres/tproch/). |
+| E3 | ❌ OPEN |  | Add a workflow job that runs the Python entrypoints against an embedded `.fdb` on the CI runner | HammerDB embeds Tcl-via-Python; ensure the Python entrypoint environment sees `fbclient.dll` (PATH from A2) and the registered ODBC driver (A3). Job runs after E1–E2 land and gates merging. |
+
+## Phase F — CI pipeline + Docker
+
+| # | Status | Commit | Task | Notes / Files |
+|---|---|---|---|---|
+| F1 | ❌ OPEN |  | Add `<Firebird>` block to [config/ci.xml](config/ci.xml) | Stages: `clone` (PSFirebird `New-FirebirdEnvironment -Version 5.0.3`), `build` (skip — upstream binary), `install`, `init` (`New-FirebirdDatabase` on a fresh `.fdb`), `start` (no-op for embedded), `test`. Reference commit `bca921d` (MySQL CI) for the exact element layout. |
+| F2 | ❌ OPEN |  | Create `Docker/firebird/Dockerfile` for a Linux CI variant | Base: `firebirdsql/firebird:5` (Alpine variant). Layer: install Firebird ODBC driver (`apk add --no-cache firebird-odbc` or build from source), copy HammerDB tree. **No** `FIREBIRD_ROOT_PASSWORD` — image is consumed by an embedded-mode workload, not a server. Image is built and pushed only by the GitHub Actions workflow, never locally. |
+| F3 | ❌ OPEN |  | Document the GitHub Actions snippet that pulls + runs the image (no local docker invocations) | Inline Markdown in this file under Phase F. Show the `actions/checkout` + `docker/build-push-action` + `docker run` steps that exercise the Firebird CI pipeline. |
+| F4 | ❌ OPEN |  | Add a `ubuntu-latest` matrix leg to `.github/workflows/firebird.yml` that runs the Firebird CI pipeline inside the F2 container | Confirms F1–F2 work end-to-end. Runs the same TPROC-C build + 1 VU run as G2 but on Linux/embedded. Logs become a workflow artifact. |
+
+## Phase G — End-to-end smoke validation
+
+| # | Status | Commit | Task | Notes / Files |
+|---|---|---|---|---|
+> All G-phase tasks run on the GitHub Actions workflow from A1. No local execution. Outputs (NOPM/TPM numbers, per-query timings, parity reports) are uploaded as workflow artifacts and referenced by SHA in PR descriptions.
+
+| # | Status | Commit | Task | Notes / Files |
+|---|---|---|---|---|
+| G1 | ❌ OPEN |  | Headless GUI registration check on `windows-latest` | The Tk GUI cannot be exercised visually on a CI runner. Substitute: a tclsh job that loads `src/generic/geninit.tcl`, asserts `[dict exists $dbdict firebird]`, and asserts the per-DB Tcl modules source without error. No screenshots — logs are the artifact. |
+| G2 | ❌ OPEN |  | TPROC-C build (1 warehouse) → run (1 VU, 2 min rampup, 5 min duration) → non-zero NOPM/TPM, on CI | Workflow runs both `fb_storedprocs=true` and `fb_storedprocs=false` legs. Numbers captured from the run log artifact and posted to the PR via `actions/github-script`. |
+| G3 | ❌ OPEN |  | TPROC-H build (scale 1) → run all 22 queries → all complete, on CI | Per-query timings written to a workflow artifact (CSV). Any query failure → flag back to C10 with the SQL fragment in the failure log. |
+| G4 | ❌ OPEN |  | Python mirror runs the same TPROC-C build/run on CI; results within ±10% of Tcl path | Same workflow, parallel job. Compares NOPM artifact from G2 vs the Python job's artifact. |
+| G5 | ❌ OPEN |  | Workflow job: hash/row-count parity of TPROC-C tables vs a PostgreSQL build at same warehouse count | Spin up PostgreSQL via `services:` in the workflow, build the same 1-warehouse schema with the existing pg scripts, then compare per-table `COUNT(*)` and a stable column hash. Report uploaded as artifact. |
+
+## Phase H — Documentation & follow-ups
+
+| # | Status | Commit | Task | Notes / Files |
+|---|---|---|---|---|
+| H1 | ❌ OPEN |  | Update https://www.hammerdb.com/docs/ chapter mentioning supported databases | Coordinate with maintainers via PR — docs live outside this repo. |
+| H2 | ❌ OPEN |  | Open follow-up issue for `fbmet.tcl` (Active Session History via `MON$` tables) | Explicitly out of scope for this initial integration. Link to [src/postgresql/pgmet.tcl](src/postgresql/pgmet.tcl) and [src/mysql/mysqlmet.tcl](src/mysql/mysqlmet.tcl) as references. |
+| H3 | ⏯️ DEFERRED |  | Native `tdbc::firebird` driver evaluation | Blocked by: ODBC route validated in Phases C–G first. Revisit only if ODBC overhead becomes the benchmark bottleneck. |
+| H4 | ❌ OPEN |  | Announce on the HammerDB GitHub Discussion #57 (Firebird request thread) | After Phase G passes. |
