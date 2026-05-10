@@ -143,3 +143,11 @@ jobs:
           $env:FB_DB_PATH = ($fbDb -replace '\\', '/')
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_smoke.tcl"
           if ($LASTEXITCODE -ne 0) { throw "tdbc::odbc smoke test failed with exit $LASTEXITCODE" }
+
+      - name: Verify Firebird registration in database.xml + firebird.xml
+        shell: pwsh
+        env:
+          HAMMERDB_ROOT: ${{ github.workspace }}
+        run: |
+          & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_register.tcl"
+          if ($LASTEXITCODE -ne 0) { throw "Firebird registration check failed with exit $LASTEXITCODE" }

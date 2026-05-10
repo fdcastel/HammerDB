@@ -55,7 +55,7 @@ This is a living tracker. **Update it every time work moves forward** — do not
 |---|---|---|---|---|
 | B1 | 🔧 IN PROGRESS |  | Add `<firebird>` block to [config/database.xml](config/database.xml) | Fields: `name=Firebird`, `description=Firebird`, `prefix=fb`, `library=tdbc::odbc 1.1.1`, `workloads=TPROC-C TPROC-H`, `commands=odbc execute paramtype prepare connection allrows` (mirror MSSQL's command list). |
 | B2 | 🔧 IN PROGRESS |  | Create [config/firebird.xml](config/firebird.xml) with `<connection>`, `<tpcc>`, and `<tpch>` blocks | Template: copy [config/postgresql.xml](config/postgresql.xml) and rename `pg_*` → `fb_*`. Defaults: `fb_host=localhost`, `fb_port=3050`, `fb_dbase=tpcc.fdb`, `fb_user=SYSDBA`, `fb_pass=masterkey`, `fb_storedprocs=true`. `<connection>` adds `fb_odbc_driver` (default `Firebird ODBC Driver`), `fb_embedded` (default `true`). |
-| B3 | ❌ OPEN |  | Confirm GUI/CLI auto-discovery picks up Firebird without bootstrap edits | `src/generic/geninit.tcl` and `src/generic/geninitcli.tcl` enumerate from `database.xml`. Launch `./hammerdb` GUI → the Firebird radio button should appear in the tree. No code change expected; if missing, debug the dict load. |
+| B3 | 🔧 IN PROGRESS |  | Confirm GUI/CLI auto-discovery picks up Firebird without bootstrap edits | Workflow step runs `.github/workflows/scripts/fb_register.tcl` which loads `config/database.xml` and `config/firebird.xml` via HammerDB's own `::XML::To_Dict` (the same parser used by `geninit.tcl`/`geninitcli.tcl`) and asserts the `firebird` key is present with the expected fields. GUI radio-button check is part of G1. |
 
 ## Phase C — Core Tcl modules (`src/firebird/`)
 
