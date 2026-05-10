@@ -79,17 +79,38 @@ jobs:
         shell: pwsh
         run: |
           choco install magicsplat-tcl-tk -y --no-progress
-          # Magicsplat installs to C:\Tcl by default
-          $tclshCandidates = @(
-            'C:\Tcl\bin\tclsh.exe',
-            'C:\Tcl\bin\tclsh90.exe',
-            'C:\Tcl\bin\tclsh86.exe'
+          # Refresh PATH from registry so the just-installed Tcl shows up
+          Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
+          Update-SessionEnvironment
+          # Find tclsh in common Magicsplat install locations
+          $candidates = @(
+            'C:\Tcl\bin', 'C:\Tcl90\bin', 'C:\Tcl86\bin',
+            'C:\Program Files\Tcl\bin',
+            'C:\Program Files\Magicsplat\Tcl-Tk\bin',
+            'C:\Program Files (x86)\Magicsplat\Tcl-Tk\bin'
           )
-          $tclsh = $tclshCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          $tclsh = $null
+          foreach ($dir in $candidates) {
+            if (Test-Path $dir) {
+              $found = Get-ChildItem -Path $dir -Filter 'tclsh*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($found) { $tclsh = $found.FullName; break }
+            }
+          }
+          if (-not $tclsh) {
+            # Fall back to a recursive search under C:\ Program Files / C:\Tcl
+            $found = Get-ChildItem -Path 'C:\','C:\Program Files\','C:\Program Files (x86)\' -Filter 'tclsh*.exe' -Recurse -ErrorAction SilentlyContinue -Depth 4 | Select-Object -First 1
+            if ($found) { $tclsh = $found.FullName }
+          }
           if (-not $tclsh) { throw "tclsh.exe not found after magicsplat-tcl-tk install" }
           Write-Host "tclsh: $tclsh"
+          $tclshDir = Split-Path -Parent $tclsh
           "TCLSH=$tclsh" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "C:\Tcl\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "$tclshDir" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          # Confirm tdbc::odbc loads
+          $verify = Join-Path $env:RUNNER_TEMP 'fb_verify_tdbc.tcl'
+          'package require tdbc::odbc; puts "tdbc::odbc [package require tdbc::odbc]"' | Set-Content -Path $verify -Encoding ASCII
+          & $tclsh $verify
+          if ($LASTEXITCODE -ne 0) { throw "tdbc::odbc not available in $tclsh" }
 
       # ---------------------------------------------------------------------
       # Embedded-mode ODBC connection string template (canonical, used by

@@ -38,7 +38,7 @@ This is a living tracker. **Update it every time work moves forward** — do not
 >
 > **Firebird mode:** Use Firebird **Embedded** — no service install, no listener, no SYSDBA password to manage. The benchmark process loads `fbclient.dll` / `libfbclient.so` and opens the database file directly.
 >
-> **Tooling:** [PSFirebird](https://github.com/fdcastel/PSFirebird) (`Install-Module PSFirebird` from the PowerShell Gallery, requires PS 7.4+) provisions the Firebird binaries via `New-FirebirdEnvironment`. The Firebird ODBC driver comes from Chocolatey (`choco install firebird-odbc -y`).
+> **Tooling:** [PSFirebird](https://github.com/fdcastel/PSFirebird) (`Install-Module PSFirebird` from the PowerShell Gallery, requires PS 7.4+) provisions the Firebird binaries via `New-FirebirdEnvironment`. The Firebird ODBC driver comes from Chocolatey (`choco install firebird-odbc -y`); confirmed registered as `Firebird ODBC Driver` (no slashes/brackets — the legacy `Firebird/InterBase(r) driver` name is **not** what choco installs). Tcl/Tk for the smoke step is `choco install magicsplat-tcl-tk -y` (bundles `tdbc::odbc`).
 
 | # | Status | Commit | Task | Notes / Files |
 |---|---|---|---|---|
