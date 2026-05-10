@@ -1,0 +1,38 @@
+name: Firebird CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/firebird/**"
+      - "scripts/tcl/firebird/**"
+      - "scripts/python/firebird/**"
+      - "config/firebird.xml"
+      - "config/database.xml"
+      - "config/ci.xml"
+      - "Docker/firebird/**"
+      - "tmp/THE_PLAN.md"
+      - ".github/workflows/firebird.yml"
+  push:
+    branches:
+      - "feature/firebird-**"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-smoke:
+    name: Windows / Firebird Embedded smoke
+    runs-on: windows-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show runner environment
+        shell: pwsh
+        run: |
+          $PSVersionTable
+          choco --version
+          Get-ComputerInfo | Select-Object OsName, OsVersion, OsArchitecture
