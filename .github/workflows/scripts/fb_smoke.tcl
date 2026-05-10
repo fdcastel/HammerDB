@@ -19,11 +19,15 @@ set connStr "Driver={$driver};Dbname=$dbpath;Client=fbclient.dll;User=SYSDBA;"
 puts "connection string: $connStr"
 
 set conn [tdbc::odbc::connection new $connStr]
+# Firebird upper-cases unquoted identifiers, so tdbc returns dict
+# keys like ONE, not one. Read the first column by position to stay
+# dialect-neutral.
 set stmt [$conn prepare {SELECT 1 AS one FROM RDB$DATABASE}]
 set ok 0
 $stmt foreach row {
     puts "row: $row"
-    if {[dict get $row one] eq "1"} { set ok 1 }
+    set first [lindex [dict values $row] 0]
+    if {$first eq "1"} { set ok 1 }
 }
 $stmt close
 $conn close
