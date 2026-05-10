@@ -107,6 +107,8 @@ jobs:
       # ---------------------------------------------------------------------
       - name: Smoke test - create embedded .fdb and run tdbc::odbc query
         shell: pwsh
+        env:
+          FB_ODBC_DRIVER: ${{ env.FIREBIRD_ODBC_DRIVER }}
         run: |
           $fbDb = Join-Path $env:RUNNER_TEMP 'firebird\smoke.fdb'
           if (Test-Path $fbDb) { Remove-Item $fbDb -Force }
@@ -114,28 +116,6 @@ jobs:
           New-FirebirdDatabase -Path $fbDb -User SYSDBA
           if (-not (Test-Path $fbDb)) { throw "Failed to create embedded database at $fbDb" }
           Write-Host "Created embedded database: $fbDb ($((Get-Item $fbDb).Length) bytes)"
-
-          $tclScript = Join-Path $env:RUNNER_TEMP 'fb_smoke.tcl'
-          $driverName = $env:FIREBIRD_ODBC_DRIVER
-          $dbnameForTcl = $fbDb -replace '\\', '/'
-          $template = @'
-package require tdbc::odbc
-set conn [tdbc::odbc::connection new "Driver={__DRIVER__};Dbname=__DBNAME__;Client=fbclient.dll;User=SYSDBA;"]
-set stmt [$conn prepare {SELECT 1 AS one FROM RDB$DATABASE}]
-$stmt foreach row {
-    puts "row: $row"
-    if {[dict get $row one] ne "1"} { exit 2 }
-}
-$stmt close
-$conn close
-puts "OK"
-'@
-          $template = $template.Replace('__DRIVER__', $driverName).Replace('__DBNAME__', $dbnameForTcl)
-          Set-Content -Path $tclScript -Value $template -Encoding ASCII
-
-          Write-Host "--- Tcl smoke script ---"
-          Get-Content $tclScript
-          Write-Host "------------------------"
-
-          & $env:TCLSH $tclScript
+          $env:FB_DB_PATH = ($fbDb -replace '\\', '/')
+          & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_smoke.tcl"
           if ($LASTEXITCODE -ne 0) { throw "tdbc::odbc smoke test failed with exit $LASTEXITCODE" }
