@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<firebird>
+    <connection>
+        <fb_host>localhost</fb_host>
+        <fb_port>3050</fb_port>
+        <fb_odbc_driver>Firebird ODBC Driver</fb_odbc_driver>
+        <fb_charset>UTF8</fb_charset>
+        <fb_embedded>true</fb_embedded>
+    </connection>
+    <tpcc>
+        <schema>
+            <fb_count_ware>1</fb_count_ware>
+            <fb_num_vu>1</fb_num_vu>
+            <fb_user>SYSDBA</fb_user>
+            <fb_pass>masterkey</fb_pass>
+            <fb_dbase>tpcc.fdb</fb_dbase>
+            <fb_storedprocs>true</fb_storedprocs>
+            <fb_partition>false</fb_partition>
+        </schema>
+        <driver>
+            <fb_total_iterations>10000000</fb_total_iterations>
+            <fb_raiseerror>false</fb_raiseerror>
+            <fb_keyandthink>false</fb_keyandthink>
+            <fb_driver>timed</fb_driver>
+            <fb_rampup>2</fb_rampup>
+            <fb_duration>5</fb_duration>
+            <fb_allwarehouse>false</fb_allwarehouse>
+            <fb_timeprofile>false</fb_timeprofile>
+            <fb_async_scale>false</fb_async_scale>
+            <fb_async_client>10</fb_async_client>
+            <fb_async_verbose>false</fb_async_verbose>
+            <fb_async_delay>1000</fb_async_delay>
+            <fb_connect_pool>false</fb_connect_pool>
+        </driver>
+    </tpcc>
+    <tpch>
+        <schema>
+            <fb_scale_fact>1</fb_scale_fact>
+            <fb_tpch_user>SYSDBA</fb_tpch_user>
+            <fb_tpch_pass>masterkey</fb_tpch_pass>
+            <fb_tpch_dbase>tpch.fdb</fb_tpch_dbase>
+            <fb_num_tpch_threads>1</fb_num_tpch_threads>
+        </schema>
+        <driver>
+            <fb_total_querysets>1</fb_total_querysets>
+            <fb_raise_query_error>false</fb_raise_query_error>
+            <fb_verbose>false</fb_verbose>
+            <fb_refresh_on>false</fb_refresh_on>
+            <fb_update_sets>1</fb_update_sets>
+            <fb_trickle_refresh>1000</fb_trickle_refresh>
+            <fb_refresh_verbose>false</fb_refresh_verbose>
+        </driver>
+    </tpch>
+</firebird>

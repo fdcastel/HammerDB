@@ -49,4 +49,12 @@
         <workloads>TPROC-C TPROC-H</workloads>
         <commands>maria::sel mariause mariaescape mariasel marianext mariaseek mariamap mariaexec mariaclose mariainfo mariaresult mariacol mariastate mariainsertid mariaquery mariaendquery mariabaseinfo mariaping mariachangeuser mariareceive</commands>
 </mariadb>
+<firebird>
+        <name>Firebird</name>
+        <description>Firebird</description>
+        <prefix>fb</prefix>
+        <library>tdbc::odbc 1.1.1</library>
+        <workloads>TPROC-C TPROC-H</workloads>
+        <commands>odbc execute paramtype prepare connection allrows</commands>
+</firebird>
 </database>

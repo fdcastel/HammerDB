@@ -53,8 +53,8 @@ This is a living tracker. **Update it every time work moves forward** — do not
 
 | # | Status | Commit | Task | Notes / Files |
 |---|---|---|---|---|
-| B1 | ❌ OPEN |  | Add `<firebird>` block to [config/database.xml](config/database.xml) | Fields: `name=Firebird`, `description=Firebird`, `prefix=fb`, `library=tdbc::odbc 1.1.1`, `workloads=TPROC-C TPROC-H`, `commands=odbc execute paramtype prepare connection allrows` (mirror MSSQL's command list). |
-| B2 | ❌ OPEN |  | Create [config/firebird.xml](config/firebird.xml) with `<connection>`, `<tpcc>`, and `<tpch>` blocks | Template: copy [config/postgresql.xml](config/postgresql.xml) and rename `pg_*` → `fb_*`. Defaults: `fb_host=localhost`, `fb_port=3050`, `fb_dbase=tpcc.fdb`, `fb_user=SYSDBA`, `fb_pass=masterkey`, `fb_storedprocs=true`. Both `<tpcc>` and `<tpch>` sections required. |
+| B1 | 🔧 IN PROGRESS |  | Add `<firebird>` block to [config/database.xml](config/database.xml) | Fields: `name=Firebird`, `description=Firebird`, `prefix=fb`, `library=tdbc::odbc 1.1.1`, `workloads=TPROC-C TPROC-H`, `commands=odbc execute paramtype prepare connection allrows` (mirror MSSQL's command list). |
+| B2 | 🔧 IN PROGRESS |  | Create [config/firebird.xml](config/firebird.xml) with `<connection>`, `<tpcc>`, and `<tpch>` blocks | Template: copy [config/postgresql.xml](config/postgresql.xml) and rename `pg_*` → `fb_*`. Defaults: `fb_host=localhost`, `fb_port=3050`, `fb_dbase=tpcc.fdb`, `fb_user=SYSDBA`, `fb_pass=masterkey`, `fb_storedprocs=true`. `<connection>` adds `fb_odbc_driver` (default `Firebird ODBC Driver`), `fb_embedded` (default `true`). |
 | B3 | ❌ OPEN |  | Confirm GUI/CLI auto-discovery picks up Firebird without bootstrap edits | `src/generic/geninit.tcl` and `src/generic/geninitcli.tcl` enumerate from `database.xml`. Launch `./hammerdb` GUI → the Firebird radio button should appear in the tree. No code change expected; if missing, debug the dict load. |
 
 ## Phase C — Core Tcl modules (`src/firebird/`)
