@@ -53,6 +53,9 @@ jobs:
           # Expose fbclient.dll on PATH for the rest of the workflow
           "$fbDir" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
           "FIREBIRD_HOME=$fbDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # PSFirebird's [FirebirdEnvironment]::default() picks this up so
+          # later workflow steps can call cmdlets without -Environment
+          "FIREBIRD_ENVIRONMENT=$fbDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Install Firebird ODBC driver
         shell: pwsh
@@ -134,7 +137,7 @@ jobs:
           $fbDb = Join-Path $env:RUNNER_TEMP 'firebird\smoke.fdb'
           if (Test-Path $fbDb) { Remove-Item $fbDb -Force }
           Import-Module PSFirebird
-          New-FirebirdDatabase -Path $fbDb -User SYSDBA
+          New-FirebirdDatabase -Database $fbDb -Force
           if (-not (Test-Path $fbDb)) { throw "Failed to create embedded database at $fbDb" }
           Write-Host "Created embedded database: $fbDb ($((Get-Item $fbDb).Length) bytes)"
           $env:FB_DB_PATH = ($fbDb -replace '\\', '/')
