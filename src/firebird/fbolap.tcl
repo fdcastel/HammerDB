@@ -415,6 +415,348 @@ proc fb_load_tpch { conn scale_factor } {
     return $out
 }
 
+# ---------------------------------------------------------------------
+# TPROC-H power test: RF1 (insert refresh), 22 queries, RF2 (delete).
+#
+# Per TPC-H 5.3.4 a power test runs RF1 → all 22 queries in their
+# ordered sequence → RF2, then reports the geometric mean of query
+# times. Multi-VU "throughput" tests are out of scope for the initial
+# Firebird integration (see THE_PLAN.md).
+# ---------------------------------------------------------------------
+
+proc fb_tpch_rf1 { conn scale_factor upd_num } {
+    # Insert SF*1500 new orders and their lineitems (1-7 per order).
+    # Orderkeys are produced by mk_sparse with upd_num >= 1, ensuring
+    # they don't collide with the original load (upd_num=0).
+    namespace import -force ::tpchcommon::*
+    set L_PKEY_MAX [expr {int(200000 * $scale_factor)}]
+    set O_CKEY_MAX [expr {int(150000 * $scale_factor)}]
+    set O_ODATE_MAX [expr {(92001 + 2557 - (121 + 30) - 1)}]
+    set sfrows [expr {int($scale_factor * 1500)}]
+    if {$sfrows < 1} { set sfrows 1 }
+    set startindex [expr {(($upd_num * $sfrows) - $sfrows) + 1}]
+    set endindex [expr {$upd_num * $sfrows}]
+
+    array set ascdate {}
+    for {set d 1} {$d <= 2557} {incr d} { set ascdate($d) [mk_time_bcp $d] }
+
+    set stmtO [$conn prepare {
+        INSERT INTO ORDERS
+            (O_ORDERDATE, O_ORDERKEY, O_CUSTKEY, O_ORDERPRIORITY,
+             O_SHIPPRIORITY, O_CLERK, O_ORDERSTATUS, O_TOTALPRICE, O_COMMENT)
+        VALUES (:d, :k, :ck, :op, :sp, :cl, :os, :tp, :c)
+    }]
+    set stmtL [$conn prepare {
+        INSERT INTO LINEITEM
+            (L_SHIPDATE, L_ORDERKEY, L_DISCOUNT, L_EXTENDEDPRICE,
+             L_SUPPKEY, L_QUANTITY, L_RETURNFLAG, L_PARTKEY,
+             L_LINESTATUS, L_TAX, L_COMMITDATE, L_RECEIPTDATE,
+             L_SHIPMODE, L_LINENUMBER, L_SHIPINSTRUCT, L_COMMENT)
+        VALUES (:sd, :ok, :dc, :ep, :sk, :q, :rf, :pk, :ls, :tx,
+                :cd, :rd, :sm, :ln, :si, :c)
+    }]
+    set delta 1
+    $conn begintransaction
+    set inBatch 0
+    set inserted 0
+    for {set i $startindex} {$i <= $endindex} {incr i} {
+        set okey [mk_sparse $i [expr {1 + $upd_num / 100}]]
+        set custkey [RandomNumber 1 $O_CKEY_MAX]
+        while {$custkey % 3 == 0} {
+            set custkey [expr {$custkey + $delta}]
+            if {$custkey > $O_CKEY_MAX} { set custkey $O_CKEY_MAX }
+            set delta [expr {$delta * -1}]
+        }
+        set tmp_date [RandomNumber 92002 $O_ODATE_MAX]
+        set odate $ascdate([expr {$tmp_date - 92001}])
+        set opriority [pick_str_1 o_oprio]
+        set clk_num [RandomNumber 1 [expr {int($scale_factor * 1000)}]]
+        if {$clk_num < 1} { set clk_num 1 }
+        set clerk [format "Clerk#%09d" $clk_num]
+        set comment [TEXT_1 49]
+        set totalprice 0
+        set ocnt 0
+        set lcnt [RandomNumber 1 7]
+        for {set l 0} {$l < $lcnt} {incr l} {
+            set lnum [expr {$l + 1}]
+            set lq [RandomNumber 1 50]
+            set ld [format "%1.2f" [expr {[RandomNumber 0 10] / 100.0}]]
+            set ltax [format "%1.2f" [expr {[RandomNumber 0 8] / 100.0}]]
+            set linstruct [pick_str_1 instruct]
+            set lsmode [pick_str_1 smode]
+            set lcomment [TEXT_1 27]
+            set lpk [RandomNumber 1 $L_PKEY_MAX]
+            set rprice [rpb_routine $lpk]
+            set supp_num [RandomNumber 0 3]
+            set lsk [PART_SUPP_BRIDGE $lpk $supp_num $scale_factor]
+            set lep [format "%4.2f" [expr {$rprice * $lq}]]
+            set ldi [expr {int(round($ld * 100))}]
+            set lti [expr {int(round($ltax * 100))}]
+            set lei [expr {int(round($lep * 100))}]
+            set totalprice [expr {$totalprice + (($lei * (100 - $ldi)) / 100) * (100 + $lti) / 100}]
+            set s_off [expr {[RandomNumber 1 121] + $tmp_date}]
+            set c_off [expr {[RandomNumber 30 90] + $tmp_date}]
+            set r_off [expr {[RandomNumber 1 30] + $s_off}]
+            set lsd $ascdate([expr {$s_off - 92001}])
+            set lcd $ascdate([expr {$c_off - 92001}])
+            set lrd $ascdate([expr {$r_off - 92001}])
+            set lrflag [expr {[julian $r_off] <= 95168 ? [pick_str_1 rflag] : "N"}]
+            if {[julian $s_off] <= 95168} { incr ocnt; set lstatus "F" } else { set lstatus "O" }
+            fb_exec $stmtL [dict create sd $lsd ok $okey dc $ld ep $lep \
+                sk $lsk q $lq rf $lrflag pk $lpk ls $lstatus tx $ltax \
+                cd $lcd rd $lrd sm $lsmode ln $lnum si $linstruct c $lcomment]
+        }
+        set totalprice [format "%.2f" [expr {double($totalprice) / 100}]]
+        set orderstatus [expr {$ocnt == 0 ? "O" : ($ocnt == $lcnt ? "F" : "P")}]
+        fb_exec $stmtO [dict create d $odate k $okey ck $custkey \
+            op $opriority sp 0 cl $clerk os $orderstatus \
+            tp $totalprice c $comment]
+        incr inserted
+        incr inBatch
+        if {$inBatch >= 100} { $conn commit; $conn begintransaction; set inBatch 0 }
+    }
+    $conn commit
+    $stmtO close
+    $stmtL close
+    return $inserted
+}
+
+proc fb_tpch_rf2 { conn scale_factor upd_num } {
+    # Delete SF*1500 orders + their lineitems by orderkey, using the
+    # same mk_sparse formula as RF1 with the same upd_num so we
+    # round-trip the inserts.
+    namespace import -force ::tpchcommon::*
+    set sfrows [expr {int($scale_factor * 1500)}]
+    if {$sfrows < 1} { set sfrows 1 }
+    set startindex [expr {(($upd_num * $sfrows) - $sfrows) + 1}]
+    set endindex [expr {$upd_num * $sfrows}]
+    set stmtL [$conn prepare {DELETE FROM LINEITEM WHERE L_ORDERKEY = :k}]
+    set stmtO [$conn prepare {DELETE FROM ORDERS WHERE O_ORDERKEY = :k}]
+    $conn begintransaction
+    set inBatch 0
+    set deleted 0
+    for {set i $startindex} {$i <= $endindex} {incr i} {
+        set okey [mk_sparse $i [expr {1 + $upd_num / 100}]]
+        fb_exec $stmtL [dict create k $okey]
+        fb_exec $stmtO [dict create k $okey]
+        incr deleted
+        incr inBatch
+        if {$inBatch >= 100} { $conn commit; $conn begintransaction; set inBatch 0 }
+    }
+    $conn commit
+    $stmtL close
+    $stmtO close
+    return $deleted
+}
+
+# Substitute :N placeholders in a TPC-H query template with concrete
+# values per spec. Direct port of pgolap.tcl::sub_query, but pulls
+# the template from fb_tpch_queries instead of the postgres `sql`
+# global, and uses pick_str_1 (we don't have the pick_str_2 dist
+# preloaded the way postgres does at namespace init).
+proc fb_tpch_sub_query { query_no scale_factor myposition } {
+    namespace import -force ::tpchcommon::*
+    set queries [fb_tpch_queries]
+    set q [dict get $queries $query_no]
+    switch $query_no {
+        1 { regsub -all {:1} $q [RandomNumber 60 120] q }
+        2 {
+            regsub -all {:1} $q [RandomNumber 1 50] q
+            set qc [lindex [split [pick_str_1 p_types]] 2]
+            regsub -all {:2} $q $qc q
+            regsub -all {:3} $q [pick_str_1 regions] q
+        }
+        3 {
+            regsub -all {:1} $q [pick_str_1 msegmnt] q
+            set d [RandomNumber 1 31]
+            if {[string length $d] eq 1} { set d "0$d" }
+            regsub -all {:2} $q "1995-03-$d" q
+        }
+        4 {
+            set tmp [RandomNumber 1 58]
+            set yr [expr {93 + $tmp / 12}]
+            set mon [expr {$tmp % 12 + 1}]
+            if {[string length $mon] eq 1} { set mon "0$mon" }
+            regsub -all {:1} $q "19$yr-$mon-01" q
+        }
+        5 {
+            regsub -all {:1} $q [pick_str_1 regions] q
+            regsub -all {:2} $q "19[RandomNumber 93 97]-01-01" q
+        }
+        6 {
+            regsub -all {:1} $q "19[RandomNumber 93 97]-01-01" q
+            regsub -all {:2} $q "0.0[RandomNumber 2 9]" q
+            regsub -all {:3} $q [RandomNumber 24 25] q
+        }
+        7 {
+            set qc [pick_str_1 nations2]
+            regsub -all {:1} $q $qc q
+            set qc2 $qc
+            while {$qc2 eq $qc} { set qc2 [pick_str_1 nations2] }
+            regsub -all {:2} $q $qc2 q
+        }
+        8 {
+            set qc [pick_str_1 nations2]
+            regsub -all {:1} $q $qc q
+            # Map nation to its region (same switch as mk_nation).
+            set nlist [get_dists nations2]
+            set nind [lsearch -glob $nlist "*$qc*"]
+            switch -- $nind {
+                0 - 4 - 5 - 14 - 15 - 16 { set rg "AFRICA" }
+                1 - 2 - 3 - 17 - 24      { set rg "AMERICA" }
+                8 - 9 - 12 - 18 - 21     { set rg "ASIA" }
+                6 - 7 - 19 - 22 - 23     { set rg "EUROPE" }
+                10 - 11 - 13 - 20        { set rg "MIDDLE EAST" }
+                default                  { set rg "AFRICA" }
+            }
+            regsub -all {:2} $q $rg q
+            regsub -all {:3} $q [pick_str_1 p_types] q
+        }
+        9  { regsub -all {:1} $q [pick_str_1 colors] q }
+        10 {
+            set tmp [RandomNumber 1 24]
+            set yr [expr {93 + $tmp / 12}]
+            set mon [expr {$tmp % 12 + 1}]
+            if {[string length $mon] eq 1} { set mon "0$mon" }
+            regsub -all {:1} $q "19$yr-$mon-01" q
+        }
+        11 {
+            regsub -all {:1} $q [pick_str_1 nations2] q
+            set frac [format "%11.10f" [expr {0.0001 / $scale_factor}]]
+            regsub -all {:2} $q $frac q
+        }
+        12 {
+            set qc [pick_str_1 smode]
+            regsub -all {:1} $q $qc q
+            set qc2 $qc
+            while {$qc2 eq $qc} { set qc2 [pick_str_1 smode] }
+            regsub -all {:2} $q $qc2 q
+            regsub -all {:3} $q "19[RandomNumber 93 97]-01-01" q
+        }
+        13 {
+            regsub -all {:1} $q [pick_str_1 Q13a] q
+            regsub -all {:2} $q [pick_str_1 Q13b] q
+        }
+        14 {
+            set tmp [RandomNumber 1 60]
+            set yr [expr {93 + $tmp / 12}]
+            set mon [expr {$tmp % 12 + 1}]
+            if {[string length $mon] eq 1} { set mon "0$mon" }
+            regsub -all {:1} $q "19$yr-$mon-01" q
+        }
+        15 {
+            # :VID is the per-stream view-name suffix.
+            regsub -all {:VID} $q $myposition q
+            set tmp [RandomNumber 1 58]
+            set yr [expr {93 + $tmp / 12}]
+            set mon [expr {$tmp % 12 + 1}]
+            if {[string length $mon] eq 1} { set mon "0$mon" }
+            regsub -all {:1} $q "19$yr-$mon-01" q
+        }
+        16 {
+            set qc [lindex [split [pick_str_1 p_types]] 0]
+            regsub -all {:1} $q "Brand#[RandomNumber 1 5][RandomNumber 1 5]" q
+            regsub -all {:2} $q $qc q
+            for {set i 3} {$i <= 10} {incr i} {
+                regsub -all ":$i" $q [RandomNumber 1 50] q
+            }
+        }
+        17 {
+            regsub -all {:1} $q "Brand#[RandomNumber 1 5][RandomNumber 1 5]" q
+            regsub -all {:2} $q [pick_str_1 p_cntr] q
+        }
+        18 { regsub -all {:1} $q [RandomNumber 312 315] q }
+        19 {
+            regsub -all {:1} $q "Brand#[RandomNumber 1 5][RandomNumber 1 5]" q
+            regsub -all {:2} $q "Brand#[RandomNumber 1 5][RandomNumber 1 5]" q
+            regsub -all {:3} $q "Brand#[RandomNumber 1 5][RandomNumber 1 5]" q
+            regsub -all {:4} $q [RandomNumber 1 10] q
+            regsub -all {:5} $q [RandomNumber 10 20] q
+            regsub -all {:6} $q [RandomNumber 20 30] q
+        }
+        20 {
+            regsub -all {:1} $q [pick_str_1 colors] q
+            regsub -all {:2} $q "19[RandomNumber 93 97]-01-01" q
+            regsub -all {:3} $q [pick_str_1 nations2] q
+        }
+        21 { regsub -all {:1} $q [pick_str_1 nations2] q }
+        22 {
+            for {set i 1} {$i <= 7} {incr i} {
+                regsub -all ":$i" $q [RandomNumber 10 34] q
+            }
+        }
+    }
+    return $q
+}
+
+proc fb_tpch_power_test { conn scale_factor {myposition 0} {verbose false} } {
+    # Run RF1, then the 22 queries in the spec'd order for this stream
+    # position, then RF2. Returns dict with per-query timings (ms),
+    # rows returned, and geometric mean of timings for queries that
+    # returned rows.
+    namespace import -force ::tpchcommon::*
+    set out [dict create]
+
+    set t0 [clock milliseconds]
+    set rf1_rows [fb_tpch_rf1 $conn $scale_factor 1]
+    dict set out rf1_rows $rf1_rows
+    dict set out rf1_ms [expr {[clock milliseconds] - $t0}]
+
+    set qorder [ordered_set $myposition]
+    set qtimes [dict create]
+    set qrows [dict create]
+    set timings [list]
+    foreach qno $qorder {
+        set sql [fb_tpch_sub_query $qno $scale_factor [expr {$myposition + 1}]]
+        set t0 [clock milliseconds]
+        set rows 0
+        if {$qno == 15} {
+            # View + select + drop. Run the DDL parts, time only the select.
+            set parts [split $sql ";"]
+            set i 0
+            foreach p $parts {
+                set p [string trim $p]
+                if {$p eq ""} { continue }
+                incr i
+                if {$i == 2} {
+                    set t0 [clock milliseconds]
+                    set rs [$conn prepare $p]
+                    $rs foreach -as lists row { incr rows }
+                    $rs close
+                    set elapsed [expr {[clock milliseconds] - $t0}]
+                } else {
+                    catch {$conn allrows $p}
+                }
+            }
+        } else {
+            if {[catch {
+                set rs [$conn prepare $sql]
+                $rs foreach -as lists row { incr rows }
+                $rs close
+            } err]} {
+                if {$verbose} { puts stderr "Q$qno failed: $err" }
+                set rows -1
+            }
+            set elapsed [expr {[clock milliseconds] - $t0}]
+        }
+        dict set qtimes $qno $elapsed
+        dict set qrows $qno $rows
+        if {$rows > 0} { lappend timings $elapsed }
+        if {$verbose} { puts "Q$qno: $rows rows in $elapsed ms" }
+    }
+    dict set out query_order $qorder
+    dict set out query_times_ms $qtimes
+    dict set out query_rows $qrows
+    dict set out gmean_ms [expr {[llength $timings] > 0 ? [gmean $timings] : 0}]
+    dict set out queries_with_rows [llength $timings]
+
+    set t0 [clock milliseconds]
+    set rf2_rows [fb_tpch_rf2 $conn $scale_factor 1]
+    dict set out rf2_rows $rf2_rows
+    dict set out rf2_ms [expr {[clock milliseconds] - $t0}]
+    return $out
+}
+
 proc build_fbtpch {} {
     upvar #0 dbdict dbdict
     upvar #0 configfirebird configfirebird

@@ -284,8 +284,20 @@ jobs:
           Import-Module PSFirebird
           New-FirebirdDatabase -Database $fbDb -Force
           $env:FB_DB_PATH = ($fbDb -replace '\\', '/')
+          # Persist for the power-test step (reuses the loaded .fdb)
+          "FB_TPCH_LOADED_DB=$($env:FB_DB_PATH)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_tpch_load.tcl"
           if ($LASTEXITCODE -ne 0) { throw "TPC-H load + query smoke failed with exit $LASTEXITCODE" }
+
+      - name: Run full TPROC-H power test (RF1 + 22 queries + RF2)
+        shell: pwsh
+        env:
+          FB_ODBC_DRIVER: ${{ env.FIREBIRD_ODBC_DRIVER }}
+          FB_DB_PATH: ${{ env.FB_TPCH_LOADED_DB }}
+          HAMMERDB_ROOT: ${{ github.workspace }}
+        run: |
+          & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_tpch_power.tcl"
+          if ($LASTEXITCODE -ne 0) { throw "TPC-H power test failed with exit $LASTEXITCODE" }
 
       # Phase G (run hammerdbcli end-to-end) is deferred. The HammerDB
       # Windows release ships as a self-contained .exe with the entire
