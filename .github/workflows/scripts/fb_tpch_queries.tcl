@@ -43,9 +43,19 @@ puts "OK: 22 queries present"
 # substituted before :1 (otherwise :10 would become 10 only after the
 # leading :1 has been eaten).
 proc sub_placeholders { sql {vid 1} } {
-    set m [list :VID $vid]
-    foreach n {10 9 8 7 6 5 4 3 2 1} { lappend m ":$n" 1 }
-    return [string map $m $sql]
+    # First handle :VID (q15 view-name suffix)
+    set sql [string map [list :VID $vid] $sql]
+    # Quoted placeholders ':N' → safe date/string literal. Use a date
+    # because several queries do `date ':N'` and Firebird needs a
+    # parseable date there; '1995-01-01' also satisfies plain string
+    # contexts like `n_name = ':1'`.
+    set q [list]
+    foreach n {10 9 8 7 6 5 4 3 2 1} { lappend q ":$n'" "1995-01-01'" }
+    set sql [string map $q $sql]
+    # Unquoted :N → numeric literal 1.
+    set u [list]
+    foreach n {10 9 8 7 6 5 4 3 2 1} { lappend u ":$n" 1 }
+    return [string map $u $sql]
 }
 
 set conn [ConnectToFirebird $driver true "" "" $dbpath SYSDBA "" UTF8]
