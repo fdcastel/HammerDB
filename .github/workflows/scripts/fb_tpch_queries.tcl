@@ -38,15 +38,14 @@ if {[dict size $queries] != 22} {
 puts "OK: 22 queries present"
 
 # Substitute :N placeholders + the special :VID token (q15) with
-# concrete safe values so PREPARE will parse them.
+# concrete safe values so PREPARE will parse them. Use string map
+# (literal substitution) ordered from longest key first so :10 is
+# substituted before :1 (otherwise :10 would become 10 only after the
+# leading :1 has been eaten).
 proc sub_placeholders { sql {vid 1} } {
-    set sql [string map [list :VID $vid] $sql]
-    # Replace :1..:10 with literal values that fit common contexts
-    # (numeric or string-quoted in the original template).
-    foreach n {1 2 3 4 5 6 7 8 9 10} {
-        set sql [regsub -all ":$n\\b" $sql 1]
-    }
-    return $sql
+    set m [list :VID $vid]
+    foreach n {10 9 8 7 6 5 4 3 2 1} { lappend m ":$n" 1 }
+    return [string map $m $sql]
 }
 
 set conn [ConnectToFirebird $driver true "" "" $dbpath SYSDBA "" UTF8]
