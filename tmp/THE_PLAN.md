@@ -97,10 +97,10 @@ For both TPROC-C and TPROC-H, mirror the 10-file PostgreSQL set: `*_buildschema.
 
 | # | Status | Commit | Task | Notes / Files |
 |---|---|---|---|---|
-| F1 | 🔧 IN PROGRESS |  | Add `<Firebird>` block to [config/ci.xml](config/ci.xml) | Block committed. `build` stage uses PSFirebird (`New-FirebirdEnvironment`) instead of compiling from source. `install`/`start`/`shutdown` are no-ops because Firebird Embedded has no daemon. `pipeline.single_c`/`single_h` skip the `start`/`run_sql:change_password`/`run_sql:shutdown` tokens. |
-| F2 | 🔧 IN PROGRESS |  | Create `Docker/firebird/Dockerfile` for a Linux CI variant | `Docker/firebird/Dockerfile` + `Readme.md` committed. Base: `tpcorg/hammerdb:v5.0-base` (matches `Docker/{mysql,postgres,maria,mssqls}` pattern). Adds `firebird3.0-utils` + `libfbclient2` + `unixodbc`, downloads `libOdbcFb.so` from the official FirebirdSQL release, registers it as `Firebird ODBC Driver` in `/etc/odbcinst.ini`. **Not yet validated end-to-end** — needs F4. |
-| F3 | ⏯️ DEFERRED |  | Document the GitHub Actions snippet that pulls + runs the image (no local docker invocations) | Subsumed by F4. The Readme.md under Docker/firebird/ documents `docker build` + `docker run` for users; F4 will add the GitHub Actions equivalent if the Linux pipeline is wired up. |
-| F4 | ⏯️ DEFERRED |  | Add a `ubuntu-latest` matrix leg to `.github/workflows/firebird.yml` that runs the Firebird CI pipeline inside the F2 container | Significant infra work (build image, push to GHCR, then run the same smoke + TPC-C/H tests inside it). Defer until the Dockerfile is hand-validated. |
+| F1 | ✅ DONE | cf20a89 | Add `<Firebird>` block to [config/ci.xml](config/ci.xml) | Block committed. `build` stage uses PSFirebird; `install`/`start`/`shutdown` are no-ops (embedded). |
+| F2 | ✅ DONE | 89ac8b6 | Create `Docker/firebird/Dockerfile` for a Linux CI variant | Base: `tpcorg/hammerdb:v5.0-base`. Adds `firebird3.0-utils` + `libfbclient2` + `unixodbc` + `unzip`, downloads `linux_libs.zip` from `v3-0-1-release`, installs `libOdbcFb.so`, registers `Firebird ODBC Driver` in `/etc/odbcinst.ini` via `echo … | tee`. |
+| F3 | ✅ DONE | cf20a89 | Document Docker usage | Covered by `Docker/firebird/Readme.md` (build + embedded-mode run). |
+| F4 | 🔧 IN PROGRESS | 89ac8b6 | `ubuntu-latest` job in `.github/workflows/firebird.yml` | New `docker-build` job builds the image and inspects `libfbclient*`/`libOdbcFb.so`/`/etc/odbcinst.ini` inside it. **Running the Firebird smoke tests inside the container** still pending — would need the same Magicsplat-equivalent + tdbc::odbc setup as the Windows job, plus a Linux PSFirebird path; deferred. |
 
 ## Phase G — End-to-end smoke validation
 
