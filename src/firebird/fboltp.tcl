@@ -247,7 +247,7 @@ proc fb_load_item { conn MAXITEMS } {
 
     set stmt [$conn prepare {
         INSERT INTO ITEM (I_ID, I_IM_ID, I_NAME, I_PRICE, I_DATA)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (:i_id, :i_im_id, :i_name, :i_price, :i_data)
     }]
     set inBatch 0
     $conn begintransaction
@@ -261,7 +261,8 @@ proc fb_load_item { conn MAXITEMS } {
             set last [expr {$first + 8}]
             set i_data [string replace $i_data $first $last "original"]
         }
-        $stmt execute [list $i_id $i_im_id $i_name $i_price $i_data]
+        $stmt execute [dict create i_id $i_id i_im_id $i_im_id \
+            i_name $i_name i_price $i_price i_data $i_data]
         incr inBatch
         if {$inBatch >= $::fb_loader::BATCH_SIZE} {
             $conn commit; $conn begintransaction
@@ -281,11 +282,13 @@ proc fb_load_warehouse { conn w_id } {
     $conn allrows -- {
         INSERT INTO WAREHOUSE (W_ID, W_NAME, W_STREET_1, W_STREET_2, W_CITY,
                                W_STATE, W_ZIP, W_TAX, W_YTD)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    } [list $w_id $name [lindex $addr 0] [lindex $addr 1] [lindex $addr 2] \
-            [lindex $addr 3] [lindex $addr 4] \
-            [format "%4.4f" [expr {[RandomNumber 0 2000]/10000.0}]] \
-            300000.00]
+        VALUES (:w_id, :w_name, :w_street_1, :w_street_2, :w_city,
+                :w_state, :w_zip, :w_tax, :w_ytd)
+    } [dict create w_id $w_id w_name $name \
+        w_street_1 [lindex $addr 0] w_street_2 [lindex $addr 1] \
+        w_city [lindex $addr 2] w_state [lindex $addr 3] w_zip [lindex $addr 4] \
+        w_tax [format "%4.4f" [expr {[RandomNumber 0 2000]/10000.0}]] \
+        w_ytd 300000.00]
     return 1
 }
 
@@ -296,18 +299,19 @@ proc fb_load_districts { conn w_id DIST_PER_WARE CUST_PER_DIST } {
         INSERT INTO DISTRICT (D_ID, D_W_ID, D_NAME, D_STREET_1, D_STREET_2,
                               D_CITY, D_STATE, D_ZIP, D_TAX, D_YTD,
                               D_NEXT_O_ID)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (:d_id, :d_w_id, :d_name, :d_street_1, :d_street_2,
+                :d_city, :d_state, :d_zip, :d_tax, :d_ytd, :d_next_o_id)
     }]
     $conn begintransaction
     for {set d_id 1} {$d_id <= $DIST_PER_WARE} {incr d_id} {
         set name [MakeAlphaString 6 10 $chArr $chLen]
         set addr [MakeAddress $chArr $chLen]
-        $stmt execute [list $d_id $w_id $name \
-            [lindex $addr 0] [lindex $addr 1] [lindex $addr 2] \
-            [lindex $addr 3] [lindex $addr 4] \
-            [format "%4.4f" [expr {[RandomNumber 0 2000]/10000.0}]] \
-            30000.00 \
-            [expr {$CUST_PER_DIST + 1}]]
+        $stmt execute [dict create d_id $d_id d_w_id $w_id d_name $name \
+            d_street_1 [lindex $addr 0] d_street_2 [lindex $addr 1] \
+            d_city [lindex $addr 2] d_state [lindex $addr 3] \
+            d_zip [lindex $addr 4] \
+            d_tax [format "%4.4f" [expr {[RandomNumber 0 2000]/10000.0}]] \
+            d_ytd 30000.00 d_next_o_id [expr {$CUST_PER_DIST + 1}]]
     }
     $conn commit
     $stmt close
@@ -325,12 +329,17 @@ proc fb_load_customer_history { conn w_id DIST_PER_WARE CUST_PER_DIST } {
                               C_PHONE, C_SINCE, C_CREDIT, C_CREDIT_LIM,
                               C_DISCOUNT, C_BALANCE, C_DATA, C_YTD_PAYMENT,
                               C_PAYMENT_CNT, C_DELIVERY_CNT)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (:c_id, :c_d_id, :c_w_id, :c_first, :c_middle, :c_last,
+                :c_street_1, :c_street_2, :c_city, :c_state, :c_zip,
+                :c_phone, :c_since, :c_credit, :c_credit_lim,
+                :c_discount, :c_balance, :c_data, :c_ytd_payment,
+                :c_payment_cnt, :c_delivery_cnt)
     }]
     set stmtHist [$conn prepare {
         INSERT INTO HISTORY (H_C_ID, H_C_D_ID, H_C_W_ID, H_W_ID, H_D_ID,
                              H_DATE, H_AMOUNT, H_DATA)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (:h_c_id, :h_c_d_id, :h_c_w_id, :h_w_id, :h_d_id,
+                :h_date, :h_amount, :h_data)
     }]
     set total 0
     for {set d_id 1} {$d_id <= $DIST_PER_WARE} {incr d_id} {
@@ -349,13 +358,18 @@ proc fb_load_customer_history { conn w_id DIST_PER_WARE CUST_PER_DIST } {
             set discount [format "%4.4f" [expr {[RandomNumber 0 5000]/10000.0}]]
             set c_data [MakeAlphaString 300 500 $chArr $chLen]
             set ts [fb_iso_ts]
-            $stmtCust execute [list $c_id $d_id $w_id $c_first OE $c_last \
-                [lindex $addr 0] [lindex $addr 1] [lindex $addr 2] \
-                [lindex $addr 3] [lindex $addr 4] $phone $ts $credit \
-                50000.00 $discount -10.00 $c_data 10.00 1 0]
+            $stmtCust execute [dict create c_id $c_id c_d_id $d_id c_w_id $w_id \
+                c_first $c_first c_middle OE c_last $c_last \
+                c_street_1 [lindex $addr 0] c_street_2 [lindex $addr 1] \
+                c_city [lindex $addr 2] c_state [lindex $addr 3] \
+                c_zip [lindex $addr 4] c_phone $phone c_since $ts \
+                c_credit $credit c_credit_lim 50000.00 c_discount $discount \
+                c_balance -10.00 c_data $c_data c_ytd_payment 10.00 \
+                c_payment_cnt 1 c_delivery_cnt 0]
             set h_data [MakeAlphaString 12 24 $chArr $chLen]
-            $stmtHist execute [list $c_id $d_id $w_id $w_id $d_id \
-                $ts 10.00 $h_data]
+            $stmtHist execute [dict create h_c_id $c_id h_c_d_id $d_id \
+                h_c_w_id $w_id h_w_id $w_id h_d_id $d_id h_date $ts \
+                h_amount 10.00 h_data $h_data]
             incr inBatch
             incr total
             if {$inBatch >= $::fb_loader::BATCH_SIZE} {
@@ -383,7 +397,10 @@ proc fb_load_stock { conn w_id MAXITEMS } {
                            S_DIST_01, S_DIST_02, S_DIST_03, S_DIST_04, S_DIST_05,
                            S_DIST_06, S_DIST_07, S_DIST_08, S_DIST_09, S_DIST_10,
                            S_DATA, S_YTD, S_ORDER_CNT, S_REMOTE_CNT)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (:s_i_id, :s_w_id, :s_quantity,
+                :s_dist_01, :s_dist_02, :s_dist_03, :s_dist_04, :s_dist_05,
+                :s_dist_06, :s_dist_07, :s_dist_08, :s_dist_09, :s_dist_10,
+                :s_data, :s_ytd, :s_order_cnt, :s_remote_cnt)
     }]
     $conn begintransaction
     set inBatch 0
@@ -399,8 +416,13 @@ proc fb_load_stock { conn w_id MAXITEMS } {
             set last [expr {$first + 8}]
             set s_data [string replace $s_data $first $last "original"]
         }
-        $stmt execute [concat [list $s_i_id $w_id $qty] $dists \
-                              [list $s_data 0 0 0]]
+        $stmt execute [dict create s_i_id $s_i_id s_w_id $w_id s_quantity $qty \
+            s_dist_01 [lindex $dists 0] s_dist_02 [lindex $dists 1] \
+            s_dist_03 [lindex $dists 2] s_dist_04 [lindex $dists 3] \
+            s_dist_05 [lindex $dists 4] s_dist_06 [lindex $dists 5] \
+            s_dist_07 [lindex $dists 6] s_dist_08 [lindex $dists 7] \
+            s_dist_09 [lindex $dists 8] s_dist_10 [lindex $dists 9] \
+            s_data $s_data s_ytd 0 s_order_cnt 0 s_remote_cnt 0]
         incr inBatch
         if {$inBatch >= $::fb_loader::BATCH_SIZE} {
             $conn commit; $conn begintransaction
