@@ -57,11 +57,10 @@ foreach f {fbci.tcl fbmet.tcl fbotc.tcl fbopt.tcl fboltp.tcl fbolap.tcl} {
     source [file join $root src firebird $f]
 }
 
-# Server-mode connection string. fb_build_connstr handles this when
-# fb_embedded=false. We provide the dbname in host:port:path form
-# expected by Firebird ODBC.
-set fb_dbase "$host/$port:$dbpath"
-set connstr [fb_build_connstr $driver false $host $port $fb_dbase SYSDBA masterkey UTF8]
+# Server-mode connection string. fb_build_connstr handles the
+# host/port:path formatting when fb_embedded=false; pass it the raw
+# .fdb path.
+set connstr [fb_build_connstr $driver false $host $port $dbpath SYSDBA masterkey UTF8]
 puts "Connection string template: [string map [list masterkey ***] $connstr]"
 
 # Sanity-check the master can talk to the server.

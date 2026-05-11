@@ -349,6 +349,9 @@ jobs:
           Write-Host "Firebird server PID $($instance.Process.Id) ready"
 
           $resultsJson = Join-Path $env:RUNNER_TEMP 'tpch-throughput.json'
+          # Persist the artifact path BEFORE the test runs, so the
+          # upload-artifact step has it even if the test fails.
+          "FB_TPCH_THROUGHPUT_JSON=$resultsJson" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           $env:FB_TPCH_SERVER_HOST = "localhost"
           $env:FB_TPCH_SERVER_PORT = "3050"
           $env:FB_TPCH_DBPATH = $fbDb
@@ -366,8 +369,6 @@ jobs:
                   try { Stop-Process -Id $instance.Process.Id -Force -ErrorAction SilentlyContinue } catch {}
               }
           }
-          # Persist the artifact path for the next step.
-          "FB_TPCH_THROUGHPUT_JSON=$resultsJson" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Upload TPC-H throughput results
         if: always()
