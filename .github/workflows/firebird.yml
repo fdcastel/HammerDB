@@ -21,6 +21,28 @@ permissions:
   contents: read
 
 jobs:
+  docker-build:
+    name: Linux / Docker build (Firebird image)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker build Docker/firebird/
+        run: |
+          docker build -t hammerdb-firebird:ci Docker/firebird/
+
+      - name: Inspect built image
+        run: |
+          docker run --rm hammerdb-firebird:ci bash -lc '
+            set -eux
+            ls -la /usr/lib/x86_64-linux-gnu/libfbclient*
+            ls -la /usr/lib/x86_64-linux-gnu/libOdbcFb.so
+            grep -A1 "Firebird ODBC Driver" /etc/odbcinst.ini
+            odbcinst -q -d
+            isql -h || true
+          '
+
   windows-smoke:
     name: Windows / Firebird Embedded smoke
     runs-on: windows-latest
