@@ -102,6 +102,319 @@ proc fb_create_tpch_schema { conn } {
     return $count
 }
 
+# ---------------------------------------------------------------------
+# TPROC-H bulk loader. Follows the same approach as TPROC-C C4: tdbc::
+# odbc prepared INSERTs with `:name` params, batched in transactions.
+# Generation logic comes from tpchcommon-1.0.tm (mk_time, mk_sparse,
+# pick_str_1, V_STR, TEXT_1, gen_phone, RandomNumber, etc.) - the
+# same helpers used by every other HammerDB TPROC-H driver.
+# ---------------------------------------------------------------------
+
+namespace eval ::fb_tpch_loader {
+    variable BATCH 1000
+}
+
+proc fb_tpch_load_region { conn } {
+    namespace import -force ::tpchcommon::*
+    set stmt [$conn prepare {
+        INSERT INTO REGION (R_REGIONKEY, R_NAME, R_COMMENT)
+        VALUES (:k, :n, :c)
+    }]
+    $conn begintransaction
+    for {set i 1} {$i <= 5} {incr i} {
+        set code [expr {$i - 1}]
+        set text [lindex [lindex [get_dists regions] $code] 0]
+        set comment [TEXT_1 72]
+        fb_exec $stmt [dict create k $code n $text c $comment]
+    }
+    $conn commit
+    $stmt close
+    return 5
+}
+
+proc fb_tpch_load_nation { conn } {
+    namespace import -force ::tpchcommon::*
+    # Nation-to-region mapping per TPC-H spec.
+    set stmt [$conn prepare {
+        INSERT INTO NATION (N_NATIONKEY, N_NAME, N_REGIONKEY, N_COMMENT)
+        VALUES (:k, :n, :r, :c)
+    }]
+    $conn begintransaction
+    for {set i 1} {$i <= 25} {incr i} {
+        set code [expr {$i - 1}]
+        set text [lindex [lindex [get_dists nations] $code] 0]
+        switch -- $code {
+            0 - 4 - 5 - 14 - 15 - 16 { set rcode 0 }
+            1 - 2 - 3 - 17 - 24      { set rcode 1 }
+            8 - 9 - 12 - 18 - 21     { set rcode 2 }
+            6 - 7 - 19 - 22 - 23     { set rcode 3 }
+            10 - 11 - 13 - 20        { set rcode 4 }
+            default                  { set rcode 0 }
+        }
+        set comment [TEXT_1 72]
+        fb_exec $stmt [dict create k $code n $text r $rcode c $comment]
+    }
+    $conn commit
+    $stmt close
+    return 25
+}
+
+proc fb_tpch_load_supplier { conn start_row end_row } {
+    namespace import -force ::tpchcommon::*
+    variable ::fb_tpch_loader::BATCH
+    set BBB_COMMEND  "Recommends"
+    set BBB_COMPLAIN "Complaints"
+    set stmt [$conn prepare {
+        INSERT INTO SUPPLIER
+            (S_SUPPKEY, S_NATIONKEY, S_COMMENT, S_NAME,
+             S_ADDRESS, S_PHONE, S_ACCTBAL)
+        VALUES (:k, :n, :c, :nm, :a, :p, :ab)
+    }]
+    $conn begintransaction
+    set inBatch 0
+    for {set i $start_row} {$i <= $end_row} {incr i} {
+        set name [format "Supplier#%09d" $i]
+        set address [V_STR 25]
+        set nation_code [RandomNumber 0 24]
+        set phone [gen_phone]
+        set acctbal [format "%4.2f" [expr {[RandomNumber -99999 999999] / 100.0}]]
+        set comment [TEXT_1 63]
+        # Spec: ~0.1% of suppliers have a flagged comment.
+        set bad_press [RandomNumber 1 10000]
+        if {$bad_press <= 10} {
+            set type [RandomNumber 0 100]
+            set noise [RandomNumber 0 19]
+            set offset [RandomNumber 0 [expr {19 + $noise}]]
+            set st [expr {9 + $offset + $noise}]
+            set fi [expr {$st + 10}]
+            set marker [expr {$type < 50 ? $BBB_COMPLAIN : $BBB_COMMEND}]
+            set comment [string replace $comment $st $fi $marker]
+        }
+        fb_exec $stmt [dict create k $i n $nation_code c $comment \
+            nm $name a $address p $phone ab $acctbal]
+        incr inBatch
+        if {$inBatch >= $::fb_tpch_loader::BATCH} {
+            $conn commit; $conn begintransaction
+            set inBatch 0
+        }
+    }
+    $conn commit
+    $stmt close
+    return [expr {$end_row - $start_row + 1}]
+}
+
+proc fb_tpch_load_customer { conn start_row end_row } {
+    namespace import -force ::tpchcommon::*
+    variable ::fb_tpch_loader::BATCH
+    set stmt [$conn prepare {
+        INSERT INTO CUSTOMER
+            (C_CUSTKEY, C_MKTSEGMENT, C_NATIONKEY, C_NAME,
+             C_ADDRESS, C_PHONE, C_ACCTBAL, C_COMMENT)
+        VALUES (:k, :m, :n, :nm, :a, :p, :ab, :c)
+    }]
+    $conn begintransaction
+    set inBatch 0
+    for {set i $start_row} {$i <= $end_row} {incr i} {
+        set name [format "Customer#%09d" $i]
+        set address [V_STR 25]
+        set nation_code [RandomNumber 0 24]
+        set phone [gen_phone]
+        set acctbal [format "%4.2f" [expr {[RandomNumber -99999 999999] / 100.0}]]
+        set mktsegment [pick_str_1 msegmnt]
+        set comment [TEXT_1 73]
+        fb_exec $stmt [dict create k $i m $mktsegment n $nation_code \
+            nm $name a $address p $phone ab $acctbal c $comment]
+        incr inBatch
+        if {$inBatch >= $::fb_tpch_loader::BATCH} {
+            $conn commit; $conn begintransaction
+            set inBatch 0
+        }
+    }
+    $conn commit
+    $stmt close
+    return [expr {$end_row - $start_row + 1}]
+}
+
+proc fb_tpch_load_part_partsupp { conn start_row end_row scale_factor } {
+    # Each PART row generates 4 PARTSUPP rows (one per supplier number
+    # 0..3, picked via PART_SUPP_BRIDGE so foreign keys land on real
+    # supplier IDs).
+    namespace import -force ::tpchcommon::*
+    variable ::fb_tpch_loader::BATCH
+    set stmtPart [$conn prepare {
+        INSERT INTO PART
+            (P_PARTKEY, P_TYPE, P_SIZE, P_BRAND, P_NAME,
+             P_CONTAINER, P_MFGR, P_RETAILPRICE, P_COMMENT)
+        VALUES (:k, :t, :sz, :b, :n, :ct, :mf, :rp, :c)
+    }]
+    set stmtPartSupp [$conn prepare {
+        INSERT INTO PARTSUPP
+            (PS_PARTKEY, PS_SUPPKEY, PS_SUPPLYCOST, PS_AVAILQTY, PS_COMMENT)
+        VALUES (:pk, :sk, :sc, :aq, :c)
+    }]
+    $conn begintransaction
+    set inBatch 0
+    for {set i $start_row} {$i <= $end_row} {incr i} {
+        set partkey $i
+        set name ""
+        for {set j 0} {$j < 4} {incr j} {
+            append name [pick_str_1 colors] " "
+        }
+        append name [pick_str_1 colors]
+        set mf [RandomNumber 1 5]
+        set mfgr "Manufacturer#$mf"
+        set brand "Brand#[expr {$mf * 10 + [RandomNumber 1 5]}]"
+        set type [pick_str_1 p_types]
+        set size [RandomNumber 1 50]
+        set container [pick_str_1 p_cntr]
+        set price [rpb_routine $i]
+        set comment [TEXT_1 14]
+        fb_exec $stmtPart [dict create k $partkey t $type sz $size \
+            b $brand n $name ct $container mf $mfgr rp $price c $comment]
+        for {set k 0} {$k < 4} {incr k} {
+            set suppkey [PART_SUPP_BRIDGE $i $k $scale_factor]
+            set qty [RandomNumber 1 9999]
+            set scost [format "%4.2f" [expr {[RandomNumber 100 100000] / 100.0}]]
+            set pscomment [TEXT_1 124]
+            fb_exec $stmtPartSupp [dict create pk $partkey sk $suppkey \
+                sc $scost aq $qty c $pscomment]
+        }
+        incr inBatch
+        if {$inBatch >= $::fb_tpch_loader::BATCH} {
+            $conn commit; $conn begintransaction
+            set inBatch 0
+        }
+    }
+    $conn commit
+    $stmtPart close
+    $stmtPartSupp close
+    return [expr {$end_row - $start_row + 1}]
+}
+
+proc fb_tpch_load_orders_lineitem { conn start_row end_row scale_factor } {
+    # Per-order, generates 1..7 LINEITEM rows. Spec totals: scale 1
+    # has 1.5M ORDERS, average 4 lineitems each = ~6M LINEITEM rows.
+    namespace import -force ::tpchcommon::*
+    variable ::fb_tpch_loader::BATCH
+    set L_PKEY_MAX  [expr {int(200000 * $scale_factor)}]
+    set O_CKEY_MAX  [expr {int(150000 * $scale_factor)}]
+    set O_ODATE_MAX [expr {(92001 + 2557 - (121 + 30) - 1)}]
+
+    # Pre-compute the date table once per VU to amortise mk_time_bcp.
+    array set ascdate {}
+    for {set d 1} {$d <= 2557} {incr d} {
+        set ascdate($d) [mk_time_bcp $d]
+    }
+
+    set stmtOrders [$conn prepare {
+        INSERT INTO ORDERS
+            (O_ORDERDATE, O_ORDERKEY, O_CUSTKEY, O_ORDERPRIORITY,
+             O_SHIPPRIORITY, O_CLERK, O_ORDERSTATUS, O_TOTALPRICE, O_COMMENT)
+        VALUES (:d, :k, :ck, :op, :sp, :cl, :os, :tp, :c)
+    }]
+    set stmtLine [$conn prepare {
+        INSERT INTO LINEITEM
+            (L_SHIPDATE, L_ORDERKEY, L_DISCOUNT, L_EXTENDEDPRICE,
+             L_SUPPKEY, L_QUANTITY, L_RETURNFLAG, L_PARTKEY,
+             L_LINESTATUS, L_TAX, L_COMMITDATE, L_RECEIPTDATE,
+             L_SHIPMODE, L_LINENUMBER, L_SHIPINSTRUCT, L_COMMENT)
+        VALUES (:sd, :ok, :dc, :ep, :sk, :q, :rf, :pk, :ls, :tx,
+                :cd, :rd, :sm, :ln, :si, :c)
+    }]
+    set delta 1
+    $conn begintransaction
+    set inBatch 0
+    for {set i $start_row} {$i <= $end_row} {incr i} {
+        set okey [mk_sparse $i 0]
+        set custkey [RandomNumber 1 $O_CKEY_MAX]
+        while {$custkey % 3 == 0} {
+            set custkey [expr {$custkey + $delta}]
+            if {$custkey > $O_CKEY_MAX} { set custkey $O_CKEY_MAX }
+            set delta [expr {$delta * -1}]
+        }
+        set tmp_date [RandomNumber 92002 $O_ODATE_MAX]
+        set odate $ascdate([expr {$tmp_date - 92001}])
+        set opriority [pick_str_1 o_oprio]
+        set clk_num [RandomNumber 1 [expr {int($scale_factor * 1000)}]]
+        if {$clk_num < 1} { set clk_num 1 }
+        set clerk [format "Clerk#%09d" $clk_num]
+        set comment [TEXT_1 49]
+        set spriority 0
+        set totalprice 0
+        set ocnt 0
+        set lcnt [RandomNumber 1 7]
+        # Generate lineitems first to compute totalprice.
+        set lines [list]
+        for {set l 0} {$l < $lcnt} {incr l} {
+            set lnum [expr {$l + 1}]
+            set lq [RandomNumber 1 50]
+            set ld [format "%1.2f" [expr {[RandomNumber 0 10] / 100.0}]]
+            set ltax [format "%1.2f" [expr {[RandomNumber 0 8] / 100.0}]]
+            set linstruct [pick_str_1 instruct]
+            set lsmode [pick_str_1 smode]
+            set lcomment [TEXT_1 27]
+            set lpk [RandomNumber 1 $L_PKEY_MAX]
+            set rprice [rpb_routine $lpk]
+            set supp_num [RandomNumber 0 3]
+            set lsk [PART_SUPP_BRIDGE $lpk $supp_num $scale_factor]
+            set lep [format "%4.2f" [expr {$rprice * $lq}]]
+            set ldi [expr {int(round($ld * 100))}]
+            set lti [expr {int(round($ltax * 100))}]
+            set lei [expr {int(round($lep * 100))}]
+            set totalprice [expr {$totalprice + (($lei * (100 - $ldi)) / 100) * (100 + $lti) / 100}]
+            set s_off [expr {[RandomNumber 1 121] + $tmp_date}]
+            set c_off [expr {[RandomNumber 30 90] + $tmp_date}]
+            set r_off [expr {[RandomNumber 1 30] + $s_off}]
+            set lsd $ascdate([expr {$s_off - 92001}])
+            set lcd $ascdate([expr {$c_off - 92001}])
+            set lrd $ascdate([expr {$r_off - 92001}])
+            set lrflag [expr {[julian $r_off] <= 95168 ? [pick_str_1 rflag] : "N"}]
+            if {[julian $s_off] <= 95168} {
+                incr ocnt
+                set lstatus "F"
+            } else {
+                set lstatus "O"
+            }
+            lappend lines [dict create sd $lsd ok $okey dc $ld ep $lep \
+                sk $lsk q $lq rf $lrflag pk $lpk ls $lstatus tx $ltax \
+                cd $lcd rd $lrd sm $lsmode ln $lnum si $linstruct c $lcomment]
+        }
+        set totalprice [format "%.2f" [expr {double($totalprice) / 100}]]
+        set orderstatus [expr {$ocnt == 0 ? "O" : ($ocnt == $lcnt ? "F" : "P")}]
+        fb_exec $stmtOrders [dict create d $odate k $okey ck $custkey \
+            op $opriority sp $spriority cl $clerk os $orderstatus \
+            tp $totalprice c $comment]
+        foreach line $lines { fb_exec $stmtLine $line }
+        incr inBatch
+        if {$inBatch >= 100} {
+            $conn commit; $conn begintransaction
+            set inBatch 0
+        }
+    }
+    $conn commit
+    $stmtOrders close
+    $stmtLine close
+    return [expr {$end_row - $start_row + 1}]
+}
+
+proc fb_load_tpch { conn scale_factor } {
+    # Orchestrator: load all 8 TPC-H tables for the given scale.
+    set sup [expr {int(10000 * $scale_factor)}]
+    set cust [expr {int(150000 * $scale_factor)}]
+    set part [expr {int(200000 * $scale_factor)}]
+    set ord [expr {int(1500000 * $scale_factor)}]
+    set out [dict create]
+    dict set out region    [fb_tpch_load_region $conn]
+    dict set out nation    [fb_tpch_load_nation $conn]
+    dict set out supplier  [fb_tpch_load_supplier $conn 1 $sup]
+    dict set out customer  [fb_tpch_load_customer $conn 1 $cust]
+    dict set out part_partsupp \
+        [fb_tpch_load_part_partsupp $conn 1 $part $scale_factor]
+    dict set out orders_lineitem \
+        [fb_tpch_load_orders_lineitem $conn 1 $ord $scale_factor]
+    return $out
+}
+
 proc build_fbtpch {} {
     upvar #0 dbdict dbdict
     upvar #0 configfirebird configfirebird

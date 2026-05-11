@@ -272,6 +272,21 @@ jobs:
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_tpch_queries.tcl"
           if ($LASTEXITCODE -ne 0) { throw "TPC-H query PREPARE check failed with exit $LASTEXITCODE" }
 
+      - name: Load TPC-H at scale 0.01 + run a few queries
+        shell: pwsh
+        env:
+          FB_ODBC_DRIVER: ${{ env.FIREBIRD_ODBC_DRIVER }}
+          HAMMERDB_ROOT: ${{ github.workspace }}
+          FB_TPCH_SCALE: "0.01"
+        run: |
+          $fbDb = Join-Path $env:RUNNER_TEMP 'firebird\tpch_load.fdb'
+          if (Test-Path $fbDb) { Remove-Item $fbDb -Force }
+          Import-Module PSFirebird
+          New-FirebirdDatabase -Database $fbDb -Force
+          $env:FB_DB_PATH = ($fbDb -replace '\\', '/')
+          & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_tpch_load.tcl"
+          if ($LASTEXITCODE -ne 0) { throw "TPC-H load + query smoke failed with exit $LASTEXITCODE" }
+
       # Phase G (run hammerdbcli end-to-end) is deferred. The HammerDB
       # Windows release ships as a self-contained .exe with the entire
       # source/lib tree bundled via zipfs - the binary can't be patched
