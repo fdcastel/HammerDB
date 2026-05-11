@@ -654,12 +654,15 @@ proc fb_tpch_sub_query { query_no scale_factor myposition } {
             regsub -all {:1} $q "19$yr-$mon-01" q
         }
         16 {
+            # IMPORTANT: substitute :10 first, then descend - otherwise
+            # `regsub :1` matches the leading `:1` of `:10` and breaks
+            # the IN clause (Token unknown `#` if Brand# leaks through).
             set qc [lindex [split [pick_str_1 p_types]] 0]
-            regsub -all {:1} $q "Brand#[RandomNumber 1 5][RandomNumber 1 5]" q
-            regsub -all {:2} $q $qc q
-            for {set i 3} {$i <= 10} {incr i} {
+            for {set i 10} {$i >= 3} {incr i -1} {
                 regsub -all ":$i" $q [RandomNumber 1 50] q
             }
+            regsub -all {:2} $q $qc q
+            regsub -all {:1} $q "Brand#[RandomNumber 1 5][RandomNumber 1 5]" q
         }
         17 {
             regsub -all {:1} $q "Brand#[RandomNumber 1 5][RandomNumber 1 5]" q
