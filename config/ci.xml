@@ -159,4 +159,53 @@
     <Db2>
     <!-- Placeholder for IBM Db2 database automation -->
     </Db2>
+    <Firebird>
+        <!--
+            Firebird CI block. Differs from the other DBs in this file
+            because Firebird is consumed in **embedded mode**: the
+            HammerDB process loads the engine via fbclient.so / .dll
+            and opens the .fdb directly, with no daemon to start or
+            stop. The "build" stage here uses PSFirebird (PowerShell)
+            to fetch a prebuilt Firebird binary instead of compiling
+            from source.
+        -->
+        <build>
+            <repo_url>https://github.com/FirebirdSQL/firebird</repo_url>
+            <ref_regexp>refs/(tags|heads)/(.+)</ref_regexp>
+            <overwrite>false</overwrite>
+            <local_dir_root>/opt/hammerdb-ci/providers/firebird</local_dir_root>
+            <build_dir>/opt/hammerdb-ci/providers/firebird/builds</build_dir>
+            <!-- PSFirebird grabs a prebuilt Firebird from the upstream releases. -->
+            <build_cmd>pwsh -c "Install-Module PSFirebird -Force -Scope CurrentUser -AllowClobber; New-FirebirdEnvironment -Version 5.0.3 -Path /opt/hammerdb-ci/providers/firebird/installs"</build_cmd>
+            <build_cmd_args></build_cmd_args>
+            <package_cmd>true</package_cmd>
+        </build>
+        <install>
+            <install_package>true</install_package>
+            <installer>true</installer>
+            <install_dir>/opt/hammerdb-ci/providers/firebird/installs</install_dir>
+            <config_dir>/opt/hammerdb-ci/providers/firebird/config</config_dir>
+            <basedir>/opt/hammerdb-ci/providers/firebird/installs</basedir>
+            <datadir>data</datadir>
+            <init_args>basedir datadir</init_args>
+            <!-- Embedded mode: nothing to start. start_cmd is a no-op
+                 so the pipeline framework still has a token to invoke. -->
+            <start_cmd>true</start_cmd>
+            <start_args></start_args>
+            <port>3050</port>
+            <run_sql_cmd>{basedir}/isql -u SYSDBA -p masterkey {datadir}/tpcc.fdb -e "{sql}"</run_sql_cmd>
+            <change_password>ALTER USER SYSDBA SET PASSWORD 'masterkey'</change_password>
+            <shutdown>true</shutdown>
+            <ping>SELECT 1 FROM RDB$DATABASE</ping>
+        </install>
+        <test>
+            <oltp>scripts/tcl/firebird/tprocc/fb_tprocc.sh</oltp>
+            <olap>scripts/tcl/firebird/tproch/fb_tproch.sh</olap>
+        </test>
+        <pipeline>
+            <!-- Embedded mode: skip start/stop/change_password steps. -->
+            <single_c>clone build package commit_msg install init start_tests:oltp</single_c>
+            <single_h>clone build package commit_msg install init start_tests:olap</single_h>
+        </pipeline>
+    </Firebird>
 </ci>
