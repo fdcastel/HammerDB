@@ -277,10 +277,18 @@ proc fb_tpcc_sp_ddl {} {
 }
 
 proc fb_create_tpcc_stored_procs { conn } {
-    # Returns count of procs installed.
+    # NOTE: tdbc::odbc cannot submit a CREATE PROCEDURE body that
+    # contains `:NAME` PSQL variable references because its prepare
+    # scanner treats those as bind placeholders. Use isql (e.g. via
+    # PSFirebird's Invoke-FirebirdIsql) with a SET TERM ^ wrapper to
+    # install these procs. The ddl strings here are kept for
+    # documentation and isql piping; the count returned is just the
+    # statement count, not a guarantee the install succeeded.
     set count 0
     foreach stmt [fb_tpcc_sp_ddl] {
-        $conn allrows $stmt
+        if {[catch {$conn allrows $stmt} err]} {
+            puts stderr "fb_create_tpcc_stored_procs: install via tdbc failed (expected, use isql): $err"
+        }
         incr count
     }
     return $count

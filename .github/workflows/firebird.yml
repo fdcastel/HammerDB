@@ -201,7 +201,19 @@ jobs:
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_runtxn.tcl"
           if ($LASTEXITCODE -ne 0) { throw "TPC-C transaction run failed with exit $LASTEXITCODE" }
 
-      - name: Install + smoke PSQL stored procedures (PAYMENT_SP)
+      - name: Install PAYMENT_SP via Invoke-FirebirdIsql (handles SET TERM)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module PSFirebird
+          $sql = Get-Content -Path "${{ github.workspace }}\.github\workflows\scripts\fb_payment_sp.sql" -Raw
+          # FB_LOADED_DB is in forward-slash form for tdbc; isql wants the platform path.
+          $fbDbForIsql = $env:FB_LOADED_DB.Replace('/', '\')
+          Write-Host "Installing PAYMENT_SP into $fbDbForIsql"
+          $out = Invoke-FirebirdIsql -Database $fbDbForIsql -Sql $sql -Verbose
+          Write-Host $out
+
+      - name: Smoke PSQL stored procedure (PAYMENT_SP via tdbc::odbc)
         shell: pwsh
         env:
           FB_ODBC_DRIVER: ${{ env.FIREBIRD_ODBC_DRIVER }}

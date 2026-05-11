@@ -29,8 +29,11 @@ foreach f {fbci.tcl fbmet.tcl fbotc.tcl fbopt.tcl fboltp.tcl fbolap.tcl} {
 set conn [ConnectToFirebird $driver true "" "" $dbpath SYSDBA "" UTF8]
 puts "Connected to $dbpath"
 
-set installed [fb_create_tpcc_stored_procs $conn]
-puts "OK: installed $installed stored procedure(s)"
+# Note: PAYMENT_SP install is handled by the workflow step that runs
+# Invoke-FirebirdIsql against fb_payment_sp.sql - tdbc::odbc cannot
+# submit a CREATE PROCEDURE body that references PSQL variables with
+# `:NAME` syntax (the prepare scanner treats those as parameter
+# placeholders). Here we just verify and exercise the installed proc.
 
 # Verify PAYMENT_SP exists in the catalog
 set found 0
