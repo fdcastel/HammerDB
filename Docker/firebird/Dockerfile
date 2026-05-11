@@ -25,8 +25,6 @@ RUN apt-get update && \
         firebird3.0-utils \
         libfbclient2 \
         unixodbc \
-        odbcinst1debian2 \
-        libtommath1 \
         wget \
         ca-certificates && \
     rm -rf /var/lib/apt/lists/*
