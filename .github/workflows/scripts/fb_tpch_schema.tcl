@@ -51,10 +51,12 @@ puts "OK: all 8 TPC-H tables present"
 # Confirm primary keys
 set expected_pk {REGION_PK NATION_PK SUPPLIER_PK PART_PK PARTSUPP_PK CUSTOMER_PK ORDERS_PK LINEITEM_PK}
 set actual_pk [list]
+# Firebird auto-names PRIMARY KEY indexes (RDB$PRIMARY*) - the
+# constraint name we asked for lives in RDB$RELATION_CONSTRAINTS.
 $conn foreach -as lists row {
-    SELECT TRIM(RDB$INDEX_NAME) FROM RDB$INDICES
-    WHERE RDB$SYSTEM_FLAG = 0 AND RDB$INDEX_NAME LIKE '%_PK'
-    ORDER BY RDB$INDEX_NAME
+    SELECT TRIM(RDB$CONSTRAINT_NAME) FROM RDB$RELATION_CONSTRAINTS
+    WHERE RDB$CONSTRAINT_TYPE = 'PRIMARY KEY'
+    ORDER BY RDB$CONSTRAINT_NAME
 } { lappend actual_pk [lindex $row 0] }
 
 set missing [list]
