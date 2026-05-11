@@ -13,32 +13,43 @@ the open-source relational database descended from InterBase.
 |                       |    OrderStatus/StockLevel)                          |
 | TPROC-C stored procs  | ✅ All 5 PSQL procs (PAYMENT_SP/OSTAT_SP/SLEV_SP/   |
 |                       |    DELIVERY_SP/NEWORD_SP)                           |
+| MVCC retry helper     | ✅ `fb_with_retry` wraps all 5 client-side procs    |
 | TPROC-H schema        | ✅ Complete (8 tables + named PK constraints)       |
 | TPROC-H queries       | ✅ All 22 queries adapted to Firebird SQL dialect   |
-| TPROC-H bulk loader   | ❌ Not implemented (dbgen-style data generation)    |
-| TPROC-H driver        | ❌ Not implemented                                  |
+| TPROC-H bulk loader   | ✅ Complete (8 tables, scale-parameterised)         |
+| TPROC-H power test    | ✅ RF1 + 22 queries + RF2 with geometric mean       |
+| TPROC-H throughput    | ✅ Multi-VU streams + parallel refresh (server mode)|
+| CI on Windows         | ✅ 12 verification steps + bundled JSON artifact    |
+| CI on Linux (Docker)  | ✅ Image builds + inspects on `ubuntu-latest`       |
 | GUI options dialog    | ❌ Stub only (`setlocalfb*vars` helpers exist)      |
 | Transaction counter   | ❌ Stub `tcount_fb` (no `MON$STATEMENTS` polling)   |
-| MVCC retry helper     | ❌ Not implemented                                  |
-| CI on Windows         | ✅ 10 verification steps green per push             |
-| CI on Linux (Docker)  | ✅ Image builds + inspects on `ubuntu-latest`       |
 | End-to-end via real `hammerdbcli` | ⏯️ Blocked: the Windows release ships as a self-contained `.exe` with the source bundled in zipfs; needs a Bawt rebuild to test our additions |
 
 ## Architectural choices
 
-### Embedded by default
+### Embedded by default — server mode for multi-VU
 
 `config/firebird.xml` ships with `fb_embedded=true`. HammerDB loads
 `fbclient.dll` / `libfbclient.so` and opens the `.fdb` directly,
 without contacting a Firebird server daemon. No `FIREBIRD_ROOT_PASSWORD`
 or service start is needed.
 
-The CI pipeline uses [PSFirebird](https://github.com/fdcastel/PSFirebird)
-to download the Firebird 5.0.x binaries on demand; users who already
-have Firebird installed can point `fb_dbase` at their existing path.
+**Firebird Embedded is single-process** — only one OS process can hold
+a given `.fdb` open at a time. The TPC-H multi-VU throughput test
+therefore switches to **server mode**: the CI workflow uses
+[PSFirebird](https://github.com/fdcastel/PSFirebird)'s
+`Start-FirebirdInstance` to launch a Firebird server on port 3050,
+then every Tcl thread opens its own `inet://localhost:3050/...`
+connection.
 
-For server-mode (remote `.fdb`), set `fb_embedded=false` and provide
-`fb_host` + `fb_port`.
+The modern Firebird SRP security database ships empty and `CREATE
+USER SYSDBA` from an embedded session fails (no privilege to create
+`PLG$SRP`). For server mode the workflow enables `Legacy_Auth` in
+`firebird.conf` via PSFirebird's `Write-FirebirdConfiguration`,
+which has SYSDBA/masterkey baked in.
+
+For server-mode setups outside CI, set `fb_embedded=false` and
+provide `fb_host` + `fb_port` in `config/firebird.xml`.
 
 ### tdbc::odbc + the Firebird ODBC driver
 
@@ -55,6 +66,10 @@ string template, baked into `fb_build_connstr`:
 ```
 Driver={Firebird ODBC Driver};Dbname=<absolute-path>;Client=fbclient.dll;User=SYSDBA;
 ```
+
+`fb_build_connstr` also emits the server-mode form
+`Dbname=<host>/<port>:<path>;User=SYSDBA;Password=<pw>;` when
+`fb_embedded=false`.
 
 ### Two parameter conventions
 
@@ -97,12 +112,22 @@ SELECT S_QUANTITY,
   INTO :S_QTY, :S_DIST;
 ```
 
+### MVCC retry
+
+All 5 client-side TPC-C driver procs wrap their transaction body in
+a 3-attempt retry loop with 5-40 ms randomised back-off. `fb_with_retry`
+in `fboltp.tcl` catches Firebird's update-conflict markers
+(`deadlock`, `lock conflict`, `update conflict`, `concurrent update`,
+SQLSTATE `40001`, `isc_update_conflict`) and retries; anything else
+propagates. Delivery does per-district retry so a transient conflict
+on one district doesn't abort the rest.
+
 ## File layout
 
 | File           | Purpose                                                      |
 | -------------- | ------------------------------------------------------------ |
-| `fboltp.tcl`   | TPROC-C: schema DDL, bulk loader, 5 client-side driver procs, stored-proc DDL strings, `ConnectToFirebird` helper |
-| `fbolap.tcl`   | TPROC-H: schema DDL, the 22 queries (`fb_tpch_queries`)      |
+| `fboltp.tcl`   | TPROC-C: schema DDL, bulk loader, 5 client-side driver procs, stored-proc DDL strings, `ConnectToFirebird` helper, `fb_with_retry` |
+| `fbolap.tcl`   | TPROC-H: schema DDL, bulk loader (8 tables), 22 queries (`fb_tpch_queries`), `fb_tpch_sub_query`, `fb_tpch_rf1`/`fb_tpch_rf2`, `fb_tpch_power_test`, `fb_tpch_query_stream`/`fb_tpch_refresh_loop` (for multi-VU throughput) |
 | `fbopt.tcl`    | Options helpers (`setlocalfbtpccvars`, `setlocalfbtpchvars`); GUI dialog stub |
 | `fbotc.tcl`    | Transaction counter stub (`tcount_fb`); GUI dispatch only    |
 | `fbci.tcl`     | CI hook stub (mirrors MSSQL pattern)                         |
@@ -111,6 +136,28 @@ SELECT S_QUANTITY,
 Per-DB CLI entry points live in [`scripts/tcl/firebird/{tprocc,tproch}/`](../../scripts/tcl/firebird/)
 (Tcl) and [`scripts/python/firebird/{tprocc,tproch}/`](../../scripts/python/firebird/)
 (Python). They follow the same shape as the existing `pg_*` scripts.
+
+## CI benchmark results
+
+Every push runs the full benchmark matrix on Windows + Linux Docker
+build. Each instrumented step:
+
+1. Logs human-readable output to the workflow log.
+2. Appends a Markdown table to `$GITHUB_STEP_SUMMARY` so the run
+   summary page shows headline numbers without log diving.
+3. Writes a structured JSON file into a results dir; all JSONs are
+   bundled as the `firebird-benchmark-results` workflow artifact.
+
+The JSON files emitted per run:
+
+| File                      | What it captures                              |
+| ------------------------- | --------------------------------------------- |
+| `tpcc-load-1w.json`       | Per-table row counts after the TPC-C load     |
+| `tpcc-transactions.json`  | 200-txn mix, elapsed, tps, rollbacks          |
+| `tpcc-stored-procs.json`  | Install + invocation status for the 5 procs   |
+| `tpch-load.json`          | Per-table row counts for TPC-H load           |
+| `tpch-power.json`         | Power-test gmean + RF1/RF2 timings + rows     |
+| `tpch-throughput.json`    | Multi-VU streams, refresh pairs, qph metric   |
 
 ## Deferred items
 
@@ -121,12 +168,6 @@ Tracked individually in `tmp/THE_PLAN.md`, summarised here:
   `fbolap.tcl` can read settings from `configfirebird`, but the
   Tk-based connection / TPROC-C / TPROC-H tabs (mirroring
   `src/postgresql/pgopt.tcl`) are not built yet.
-* **MVCC retry helper** (C8). The client-side driver procs catch and
-  re-raise on conflict, but a transparent retry loop matching the
-  pattern in `pgoltp.tcl` is not in place.
-* **TPROC-H bulk loader + driver** (C10/C11). The 8-table schema is
-  in and the 22 queries are in `fb_tpch_queries`, but the dbgen-style
-  data loader and the per-stream driver are not implemented.
 * **Real `tcount_fb`** (C12). The current proc is a stub. A real
   implementation would poll `MON$STATEMENTS` from a background thread
   to feed the GUI's TPM/NOPM display.
@@ -166,7 +207,13 @@ $env:FB_DB_PATH = ($db -replace '\\','/')
 tclsh .github/workflows/scripts/fb_smoke.tcl
 ```
 
-Each subsequent CI script (`fb_register.tcl`, `fb_modules.tcl`,
-`fb_schema.tcl`, `fb_load1w.tcl`, `fb_runtxn.tcl`, `fb_tpch_schema.tcl`,
-`fb_tpch_queries.tcl`, `fb_storedprocs.tcl`) follows the same env-var
-contract.
+Other CI scripts follow the same `HAMMERDB_ROOT` + `FB_ODBC_DRIVER` +
+`FB_DB_PATH` env-var contract: `fb_register.tcl`, `fb_modules.tcl`,
+`fb_retry.tcl`, `fb_schema.tcl`, `fb_load1w.tcl`, `fb_runtxn.tcl`,
+`fb_storedprocs.tcl`, `fb_tpch_schema.tcl`, `fb_tpch_queries.tcl`,
+`fb_tpch_load.tcl`, `fb_tpch_power.tcl`. The multi-VU
+`fb_tpch_throughput.tcl` adds `FB_TPCH_SERVER_HOST`/`FB_TPCH_SERVER_PORT`
+/`FB_TPCH_DBPATH` (server mode required).
+
+Set `FB_RESULTS_OUT=<path-to-json>` on any instrumented script to
+capture structured benchmark output the same way CI does.
