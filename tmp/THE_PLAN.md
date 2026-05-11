@@ -24,7 +24,7 @@ This is a living tracker. **Update it every time work moves forward** — do not
 
 | # | Status | Commit | Task | Notes / Files |
 |---|---|---|---|---|
-| C11b | 🔧 IN PROGRESS |  | Multi-VU throughput test (server mode) | `fb_tpch_query_stream` + `fb_tpch_refresh_loop` workers in fbolap.tcl. CI orchestrator `fb_tpch_throughput.tcl` spawns N Tcl threads via `Thread`, each connects via `inet://localhost:3050` (server mode is required because Firebird Embedded is single-process). Workflow step starts a Firebird server via `Start-FirebirdInstance`, runs the test, stops the server. Results written to JSON + `$GITHUB_STEP_SUMMARY`; uploaded as `tpch-throughput-results` workflow artifact. |
+| C11b | ✅ DONE | 2b931fd | Multi-VU throughput test (server mode) | `fb_tpch_query_stream` + `fb_tpch_refresh_loop` workers in fbolap.tcl. CI orchestrator `fb_tpch_throughput.tcl` spawns N Tcl threads via `Thread`, each connects via `inet://localhost:3050` (Firebird Embedded is single-process). Workflow step starts a Firebird server via `Start-FirebirdInstance` after writing `AuthServer = Legacy_Auth, Srp` + `WireCrypt = Disabled` to `firebird.conf` (the SRP security DB ships empty and CREATE USER from embedded mode hits a privilege wall on PLG$SRP; Legacy_Auth has SYSDBA/masterkey hardcoded). Results: 2 streams, scale 0.01, 162s elapsed, **298 RF1+RF2 refresh pairs completed in parallel**, 911 queries/hour, per-stream gmean 116ms / 175ms. JSON written to `$RUNNER_TEMP/tpch-throughput.json`, uploaded as `tpch-throughput-results` workflow artifact, and Markdown summary appended to `$GITHUB_STEP_SUMMARY` for the run page. |
 
 ### Locked decisions (do not relitigate without updating this header)
 
