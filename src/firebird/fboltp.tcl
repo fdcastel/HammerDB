@@ -56,6 +56,14 @@ proc fb_build_connstr { fb_odbc_driver fb_embedded fb_host fb_port fb_dbase fb_u
         set dbpath [string map {\\ /} $fb_dbase]
         set client [fb_default_client_lib]
         append connstr "Dbname=$dbpath;Client=$client;User=$fb_user;"
+        # Linux Firebird routes embedded connections through the auth
+        # chain (Legacy_Auth / Srp against security.fdb), so SYSDBA
+        # needs the password even in embedded mode. On Windows
+        # Trusted_Auth supplies the credential and a non-empty
+        # fb_pass is harmless.
+        if {$fb_pass ne ""} {
+            append connstr "Password=$fb_pass;"
+        }
     } else {
         # Server mode (future): host:port path.
         append connstr "Dbname=$fb_host/$fb_port:$fb_dbase;User=$fb_user;Password=$fb_pass;"

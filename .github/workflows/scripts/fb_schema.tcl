@@ -28,7 +28,11 @@ foreach f {fbci.tcl fbmet.tcl fbotc.tcl fbopt.tcl fboltp.tcl fbolap.tcl} {
 }
 
 # Embedded-mode connection per fb_build_connstr's contract.
-set conn [ConnectToFirebird $driver true "" "" $dbpath SYSDBA "" UTF8]
+# FB_PASSWORD is empty on Windows (Trusted_Auth) and set to masterkey
+# on Linux where Legacy_Auth authenticates SYSDBA against security.fdb.
+set fb_pass ""
+if {[info exists ::env(FB_PASSWORD)]} { set fb_pass $::env(FB_PASSWORD) }
+set conn [ConnectToFirebird $driver true "" "" $dbpath SYSDBA $fb_pass UTF8]
 puts "Connected to $dbpath via $driver"
 
 set created [fb_create_tpcc_schema $conn]

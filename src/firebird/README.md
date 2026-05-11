@@ -190,15 +190,19 @@ The JSON files emitted per run:
   binary uses Tcl `zipfs` to bundle src/, modules/ etc., so on-disk
   overlays are ignored). The standalone tdbc::odbc CI verifications
   cover the same code paths.
-* **Linux SQL coverage in CI.** The `ubuntu-latest` job builds the
-  Docker image and verifies that `libfbclient`, `libOdbcFb.so` and
-  `tdbc::odbc` load, but does not exercise SQL round-trips. The
-  upstream Linux build of the Firebird ODBC driver (verified on both
-  `v3-0-1-release` and `v3.5.0-rc1`) returns a garbled diagnostic
-  record on every failed `SQLDriverConnect` — empty SQLSTATE,
-  non-deterministic native code, and a message truncated to a single
-  `[` character — which makes the driver unusable behind `tdbc::odbc`
-  on Linux. The full SQL/PSQL path is covered on Windows only.
+* **Linux ODBC driver pin.** The Docker image pulls the Firebird
+  ODBC driver from the unofficial `v3.5.1-rc1` build at
+  [github.com/fdcastel/firebird-odbc-driver](https://github.com/fdcastel/firebird-odbc-driver/releases/tag/v3.5.1-rc1),
+  which applies the fix for an unchecked C-style downcast in the
+  `OdbcConnection::connect` catch block. The official releases
+  (`v3-0-1-release` and `v3.5.0-rc1`) reinterpret-cast every caught
+  `std::exception &` to `SQLException &`, so on Linux any path that
+  raises a `Firebird::FbException` or `std::bad_alloc` lands in
+  `SQLGetDiagRec` as empty SQLSTATE + non-deterministic native code
+  + a one-character message — making the driver unusable behind
+  `tdbc::odbc`. Once the fix lands in an upstream release, the
+  `FB_ODBC_URL` ARG in `Docker/firebird/Dockerfile` should be moved
+  back to `github.com/FirebirdSQL/firebird-odbc-driver`.
 
 ## Local testing
 

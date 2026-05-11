@@ -1,0 +1,3 @@
+# Ephemeral working directory (planning notes, scratch files, vendored
+# upstream sources). Never committed.
+tmp/

@@ -42,14 +42,38 @@ jobs:
             tclsh <<<"package require tdbc::odbc; puts \"tdbc::odbc OK [package require tdbc::odbc]\""
           '
 
-      # End-to-end SQL on Linux is intentionally NOT exercised. The
-      # upstream Firebird ODBC driver (tested v3-0-1-release and
-      # v3.5.0-rc1) returns garbage native error codes and SQLSTATE
-      # 00000 on every connection attempt from tdbc::odbc - even when
-      # libfbclient + isql open the same .fdb without issue. The
-      # error reporting is so broken we can't even tell whether the
-      # connection succeeded. The Windows job covers the full SQL
-      # path. See src/firebird/README.md for context.
+      # Exercise libOdbcFb.so end-to-end on Linux: create a fresh .fdb
+      # via isql-fb (libfbclient embedded path), then run fb_smoke.tcl
+      # + fb_schema.tcl through tclsh inside the container so SQL
+      # round-trips through the ODBC driver are actually verified.
+      # FB_PASSWORD=masterkey because on Linux FB3 the Legacy_Auth /
+      # Srp chain authenticates SYSDBA against security.fdb even for
+      # embedded connections (Windows uses Trusted_Auth, so the
+      # Windows job leaves FB_PASSWORD unset).
+      - name: Linux smoke - create .fdb + run fb_smoke.tcl + fb_schema.tcl
+        run: |
+          docker run --rm -u 0 \
+            -v "${{ github.workspace }}:/work" \
+            -w /work \
+            -e HAMMERDB_ROOT=/work \
+            -e FB_ODBC_DRIVER="Firebird ODBC Driver" \
+            -e FB_PASSWORD=masterkey \
+            hammerdb-firebird:ci bash -lc '
+              set -eux
+
+              # 1. Smoke: create a fresh .fdb and probe SELECT 1
+              rm -f /tmp/smoke.fdb
+              echo "CREATE DATABASE '"'"'/tmp/smoke.fdb'"'"' USER '"'"'SYSDBA'"'"' PASSWORD '"'"'masterkey'"'"'; QUIT;" | isql-fb -q
+              ls -la /tmp/smoke.fdb
+              FB_DB_PATH=/tmp/smoke.fdb \
+                tclsh .github/workflows/scripts/fb_smoke.tcl
+
+              # 2. Schema: build the full 9-table TPC-C schema
+              rm -f /tmp/schema.fdb
+              echo "CREATE DATABASE '"'"'/tmp/schema.fdb'"'"' USER '"'"'SYSDBA'"'"' PASSWORD '"'"'masterkey'"'"'; QUIT;" | isql-fb -q
+              FB_DB_PATH=/tmp/schema.fdb \
+                tclsh .github/workflows/scripts/fb_schema.tcl
+            '
 
   windows-smoke:
     name: Windows / Firebird Embedded smoke

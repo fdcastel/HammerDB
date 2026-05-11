@@ -25,6 +25,13 @@ if {[info exists ::env(FB_CLIENT_LIB)] && $::env(FB_CLIENT_LIB) ne ""} {
     set client "libfbclient.so.2"
 }
 set connStr "Driver={$driver};Dbname=$dbpath;Client=$client;User=SYSDBA;"
+# Optional explicit password. Embedded mode on Linux with FB3 Legacy_Auth
+# still authenticates against security.fdb / Legacy_UserManager and the
+# default SYSDBA/masterkey lives there; on Windows, Trusted_Auth makes
+# the password unnecessary, so FB_PASSWORD stays unset there.
+if {[info exists ::env(FB_PASSWORD)] && $::env(FB_PASSWORD) ne ""} {
+    append connStr "Password=$::env(FB_PASSWORD);"
+}
 puts "connection string: $connStr"
 
 set conn [tdbc::odbc::connection new $connStr]
