@@ -159,3 +159,17 @@ jobs:
         run: |
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_modules.tcl"
           if ($LASTEXITCODE -ne 0) { throw "Firebird module load failed with exit $LASTEXITCODE" }
+
+      - name: Build TPC-C schema on a fresh embedded .fdb
+        shell: pwsh
+        env:
+          FB_ODBC_DRIVER: ${{ env.FIREBIRD_ODBC_DRIVER }}
+          HAMMERDB_ROOT: ${{ github.workspace }}
+        run: |
+          $fbDb = Join-Path $env:RUNNER_TEMP 'firebird\tpcc_schema.fdb'
+          if (Test-Path $fbDb) { Remove-Item $fbDb -Force }
+          Import-Module PSFirebird
+          New-FirebirdDatabase -Database $fbDb -Force
+          $env:FB_DB_PATH = ($fbDb -replace '\\', '/')
+          & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_schema.tcl"
+          if ($LASTEXITCODE -ne 0) { throw "TPC-C schema build failed with exit $LASTEXITCODE" }
