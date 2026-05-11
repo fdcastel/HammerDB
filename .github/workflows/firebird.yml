@@ -173,3 +173,17 @@ jobs:
           $env:FB_DB_PATH = ($fbDb -replace '\\', '/')
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_schema.tcl"
           if ($LASTEXITCODE -ne 0) { throw "TPC-C schema build failed with exit $LASTEXITCODE" }
+
+      - name: Load 1 warehouse worth of TPC-C data + verify row counts
+        shell: pwsh
+        env:
+          FB_ODBC_DRIVER: ${{ env.FIREBIRD_ODBC_DRIVER }}
+          HAMMERDB_ROOT: ${{ github.workspace }}
+        run: |
+          $fbDb = Join-Path $env:RUNNER_TEMP 'firebird\tpcc_load.fdb'
+          if (Test-Path $fbDb) { Remove-Item $fbDb -Force }
+          Import-Module PSFirebird
+          New-FirebirdDatabase -Database $fbDb -Force
+          $env:FB_DB_PATH = ($fbDb -replace '\\', '/')
+          & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_load1w.tcl"
+          if ($LASTEXITCODE -ne 0) { throw "TPC-C 1-warehouse load failed with exit $LASTEXITCODE" }
