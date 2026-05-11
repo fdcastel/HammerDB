@@ -68,10 +68,12 @@ foreach msg $non_retryable_samples {
 # Simulate a body that fails on first attempt with a deadlock-style error
 # and succeeds on the second attempt.
 set ::test_counter 0
+# NOTE: error messages use brace-quoted literals because [brackets]
+# inside double-quoted strings trigger Tcl command substitution.
 set result [fb_with_retry 3 attempt_no {
     incr ::test_counter
     if {$::test_counter < 2} {
-        error "[ODBC Firebird Driver][Firebird]deadlock simulated for test"
+        error {[ODBC Firebird Driver][Firebird]deadlock simulated for test}
     }
     return "ok_after_retry"
 }]
@@ -112,7 +114,7 @@ set caught 0
 if {[catch {
     fb_with_retry 2 attempt_no {
         incr ::test_counter
-        error "[ODBC Firebird Driver][Firebird]lock conflict on no wait transaction"
+        error {[ODBC Firebird Driver][Firebird]lock conflict on no wait transaction}
     }
 } errmsg]} {
     set caught 1
