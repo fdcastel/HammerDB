@@ -29,7 +29,8 @@ database path is `${TMP}/tpcc.fdb` — set the environment variable
 - The image is based on `tpcorg/hammerdb:v5.0-base` and follows the
   same overlay pattern as `Docker/{mysql,postgres,maria,mssqls}`.
 - The Firebird ODBC driver download URL (`FB_ODBC_URL` build arg) is
-  pinned to the 3.0.x line to match the `choco install firebird-odbc`
+  pinned to the 3.0.1 release (tag `v3-0-1-release`, asset
+  `linux_libs.zip`) to match the `choco install firebird-odbc`
   package used by the Windows CI workflow. Override at build time if
   you need a different release:
 

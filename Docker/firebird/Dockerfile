@@ -26,22 +26,27 @@ RUN apt-get update && \
         libfbclient2 \
         unixodbc \
         wget \
+        unzip \
         ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Firebird ODBC driver. The official builds are on GitHub
-# Releases at https://github.com/FirebirdSQL/firebird-odbc-driver. We
-# pin to the 3.0.x line to match the Windows `firebird-odbc` chocolatey
-# package used by the GitHub Actions workflow.
-ARG FB_ODBC_URL="https://github.com/FirebirdSQL/firebird-odbc-driver/releases/download/v3.0.1/OdbcFb-LIB-Linux-x86_64.tar.gz"
+# Install Firebird ODBC driver. Official builds at
+# https://github.com/FirebirdSQL/firebird-odbc-driver/releases.
+# Tag uses the `vM-N-P-release` form (not `vM.N.P`) and the asset is
+# a .zip, not a .tar.gz. Override at build time if a newer release is
+# wanted.
+ARG FB_ODBC_URL="https://github.com/FirebirdSQL/firebird-odbc-driver/releases/download/v3-0-1-release/linux_libs.zip"
 
 RUN set -eux; \
     mkdir -p /opt/firebird-odbc && \
     cd /opt/firebird-odbc && \
-    wget -q -O OdbcFb.tar.gz "${FB_ODBC_URL}" && \
-    tar -xzf OdbcFb.tar.gz && \
-    rm OdbcFb.tar.gz && \
-    install -m 0755 libOdbcFb.so /usr/lib/x86_64-linux-gnu/libOdbcFb.so && \
+    wget -q -O OdbcFb.zip "${FB_ODBC_URL}" && \
+    unzip -j OdbcFb.zip && \
+    rm OdbcFb.zip && \
+    ls -la && \
+    so=$(ls -1 *OdbcFb*.so 2>/dev/null | head -n 1) && \
+    if [ -z "$so" ]; then so=$(ls -1 *.so | head -n 1); fi && \
+    install -m 0755 "$so" /usr/lib/x86_64-linux-gnu/libOdbcFb.so && \
     printf '%s\n' \
         '[Firebird ODBC Driver]' \
         'Description=Firebird ODBC Driver' \
