@@ -185,5 +185,18 @@ jobs:
           Import-Module PSFirebird
           New-FirebirdDatabase -Database $fbDb -Force
           $env:FB_DB_PATH = ($fbDb -replace '\\', '/')
+          # Persist the loaded .fdb path for the run-transactions step.
+          "FB_LOADED_DB=$($env:FB_DB_PATH)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_load1w.tcl"
           if ($LASTEXITCODE -ne 0) { throw "TPC-C 1-warehouse load failed with exit $LASTEXITCODE" }
+
+      - name: Run 200 TPC-C transactions (client-side mode)
+        shell: pwsh
+        env:
+          FB_ODBC_DRIVER: ${{ env.FIREBIRD_ODBC_DRIVER }}
+          FB_DB_PATH: ${{ env.FB_LOADED_DB }}
+          FB_TXN_COUNT: "200"
+          HAMMERDB_ROOT: ${{ github.workspace }}
+        run: |
+          & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_runtxn.tcl"
+          if ($LASTEXITCODE -ne 0) { throw "TPC-C transaction run failed with exit $LASTEXITCODE" }

@@ -560,9 +560,450 @@ proc build_fbtpcc {} {
     error "build_fbtpcc: GUI build flow not yet wired up; the DDL is implemented in fb_create_tpcc_schema. Tracking row loaders in THE_PLAN.md task C4-C5"
 }
 
-# Driver procs (stubs until C5/C6 land)
-proc neword   { conn no_w_id w_id_input RAISEERROR fb_storedprocs } { error "fb neword not yet implemented" }
-proc payment  { conn p_w_id w_id_input RAISEERROR fb_storedprocs } { error "fb payment not yet implemented" }
-proc delivery { conn w_id RAISEERROR fb_storedprocs }              { error "fb delivery not yet implemented" }
-proc ostat    { conn w_id RAISEERROR fb_storedprocs }              { error "fb ostat not yet implemented" }
-proc slev     { conn w_id stock_level_d_id RAISEERROR fb_storedprocs } { error "fb slev not yet implemented" }
+# ---------------------------------------------------------------------
+# TPC-C transaction procedures (client-side, prepared-statement mode).
+#
+# Each proc opens an explicit transaction, runs the SQL stream
+# specified by the TPC-C standard chapter 2, commits, and closes.
+# tdbc::odbc emits cursors for INSERT/UPDATE/DELETE returning RETURNING
+# rows; fb_exec closes the resultset between calls so the prepared
+# statement stays reusable.
+#
+# fb_storedprocs=true is reserved for when C5 lands the PSQL EXECUTE
+# PROCEDURE path; for now both modes go through the SQL stream below.
+# ---------------------------------------------------------------------
+
+# Helper: run a SELECT and return a list of dicts (one per row).
+proc fb_select { conn sql params } {
+    set stmt [$conn prepare $sql]
+    set rows [list]
+    if {[catch {$stmt foreach -as dicts -- row $params { lappend rows $row }} err]} {
+        $stmt close
+        error $err
+    }
+    $stmt close
+    return $rows
+}
+
+# Helper: run a SELECT, return the first row (or {} if no rows).
+proc fb_select1 { conn sql params } {
+    set rows [fb_select $conn $sql $params]
+    if {[llength $rows] == 0} { return {} }
+    return [lindex $rows 0]
+}
+
+# Helper: run UPDATE/DELETE/INSERT, optionally with RETURNING.
+proc fb_dml { conn sql params } {
+    set stmt [$conn prepare $sql]
+    set rows [list]
+    if {[catch {$stmt foreach -as dicts -- row $params { lappend rows $row }} err]} {
+        $stmt close
+        error $err
+    }
+    $stmt close
+    return $rows
+}
+
+# NewOrder transaction (TPC-C 2.4)
+proc neword { conn w_id w_id_input RAISEERROR fb_storedprocs } {
+    namespace import -force ::tpcccommon::*
+    set d_id [RandomNumber 1 10]
+    set c_id [NURand 1023 1 3000 8191]
+    set ol_cnt [RandomNumber 5 15]
+    set rbk [RandomNumber 1 100]
+    set entry_d [fb_iso_ts]
+
+    $conn begintransaction
+    if {[catch {
+        # Read customer + warehouse (single join, like the spec query)
+        set custw [fb_select1 $conn {
+            SELECT C.C_DISCOUNT AS C_DISCOUNT, C.C_LAST AS C_LAST,
+                   C.C_CREDIT AS C_CREDIT, W.W_TAX AS W_TAX
+            FROM CUSTOMER C, WAREHOUSE W
+            WHERE W.W_ID = :w_id AND C.C_W_ID = :w_id
+              AND C.C_D_ID = :d_id AND C.C_ID = :c_id
+        } [dict create w_id $w_id d_id $d_id c_id $c_id]]
+        if {$custw eq ""} { error "neword: no customer ($w_id,$d_id,$c_id)" }
+        set c_discount [dict get $custw C_DISCOUNT]
+        set w_tax [dict get $custw W_TAX]
+
+        # Allocate next o_id and read d_tax
+        set distRow [fb_select1 $conn {
+            SELECT D_NEXT_O_ID AS D_NEXT_O_ID, D_TAX AS D_TAX
+            FROM DISTRICT WHERE D_W_ID = :w_id AND D_ID = :d_id
+        } [dict create w_id $w_id d_id $d_id]]
+        set o_id [dict get $distRow D_NEXT_O_ID]
+        set d_tax [dict get $distRow D_TAX]
+        fb_dml $conn {
+            UPDATE DISTRICT SET D_NEXT_O_ID = D_NEXT_O_ID + 1
+            WHERE D_W_ID = :w_id AND D_ID = :d_id
+        } [dict create w_id $w_id d_id $d_id]
+
+        # Generate order lines
+        set all_local 1
+        set ol_data [list]
+        for {set ol 1} {$ol <= $ol_cnt} {incr ol} {
+            if {$ol == $ol_cnt && $rbk == 1} {
+                set ol_i_id 100001
+            } else {
+                set ol_i_id [NURand 8191 1 100000 7911]
+            }
+            if {[RandomNumber 1 100] > 1} {
+                set ol_supply_w_id $w_id
+            } else {
+                set all_local 0
+                set ol_supply_w_id [RandomNumber 1 $w_id_input]
+            }
+            set ol_quantity [RandomNumber 1 10]
+            lappend ol_data $ol_i_id $ol_supply_w_id $ol_quantity
+        }
+
+        # Insert ORDERS + NEW_ORDER
+        fb_dml $conn {
+            INSERT INTO ORDERS (O_ID, O_D_ID, O_W_ID, O_C_ID, O_ENTRY_D,
+                                O_OL_CNT, O_ALL_LOCAL)
+            VALUES (:o_id, :d_id, :w_id, :c_id, :entry_d, :ol_cnt, :all_local)
+        } [dict create o_id $o_id d_id $d_id w_id $w_id c_id $c_id \
+                       entry_d $entry_d ol_cnt $ol_cnt all_local $all_local]
+        fb_dml $conn {
+            INSERT INTO NEW_ORDER (NO_O_ID, NO_D_ID, NO_W_ID)
+            VALUES (:o_id, :d_id, :w_id)
+        } [dict create o_id $o_id d_id $d_id w_id $w_id]
+
+        # For each line: read item, update stock, insert order_line
+        set distCol [format "S_DIST_%02d" $d_id]
+        for {set i 0} {$i < $ol_cnt} {incr i} {
+            set ol_number [expr {$i + 1}]
+            set ol_i_id [lindex $ol_data [expr {$i*3}]]
+            set ol_supply_w_id [lindex $ol_data [expr {$i*3+1}]]
+            set ol_quantity [lindex $ol_data [expr {$i*3+2}]]
+
+            set itemRow [fb_select1 $conn {
+                SELECT I_PRICE AS I_PRICE, I_NAME AS I_NAME, I_DATA AS I_DATA
+                FROM ITEM WHERE I_ID = :ol_i_id
+            } [dict create ol_i_id $ol_i_id]]
+            if {$itemRow eq ""} {
+                # Spec: rollback the whole transaction on missing item.
+                error "neword: invalid item $ol_i_id"
+            }
+            set i_price [dict get $itemRow I_PRICE]
+
+            set stockRow [fb_select1 $conn "
+                SELECT S_QUANTITY AS S_QUANTITY,
+                       S_DATA AS S_DATA,
+                       $distCol AS S_DIST,
+                       S_YTD AS S_YTD,
+                       S_ORDER_CNT AS S_ORDER_CNT,
+                       S_REMOTE_CNT AS S_REMOTE_CNT
+                FROM STOCK
+                WHERE S_W_ID = :w_id AND S_I_ID = :i_id
+            " [dict create w_id $ol_supply_w_id i_id $ol_i_id]]
+            set s_quantity [dict get $stockRow S_QUANTITY]
+            set s_dist [dict get $stockRow S_DIST]
+            if {$s_quantity - $ol_quantity >= 10} {
+                set new_qty [expr {$s_quantity - $ol_quantity}]
+            } else {
+                set new_qty [expr {$s_quantity - $ol_quantity + 91}]
+            }
+            set remote_inc [expr {$ol_supply_w_id == $w_id ? 0 : 1}]
+            fb_dml $conn {
+                UPDATE STOCK SET
+                    S_QUANTITY = :new_qty,
+                    S_YTD = S_YTD + :ol_quantity,
+                    S_ORDER_CNT = S_ORDER_CNT + 1,
+                    S_REMOTE_CNT = S_REMOTE_CNT + :remote_inc
+                WHERE S_W_ID = :w_id AND S_I_ID = :i_id
+            } [dict create new_qty $new_qty ol_quantity $ol_quantity \
+                           remote_inc $remote_inc \
+                           w_id $ol_supply_w_id i_id $ol_i_id]
+
+            set ol_amount [format "%6.2f" [expr {$ol_quantity * $i_price * \
+                (1 + $w_tax + $d_tax) * (1 - $c_discount)}]]
+            fb_dml $conn {
+                INSERT INTO ORDER_LINE
+                    (OL_O_ID, OL_D_ID, OL_W_ID, OL_NUMBER,
+                     OL_I_ID, OL_SUPPLY_W_ID, OL_QUANTITY,
+                     OL_AMOUNT, OL_DIST_INFO)
+                VALUES (:o_id, :d_id, :w_id, :ol_number,
+                        :i_id, :s_w_id, :ol_quantity,
+                        :ol_amount, :s_dist)
+            } [dict create o_id $o_id d_id $d_id w_id $w_id \
+                ol_number $ol_number i_id $ol_i_id s_w_id $ol_supply_w_id \
+                ol_quantity $ol_quantity ol_amount $ol_amount s_dist $s_dist]
+        }
+        $conn commit
+    } err]} {
+        catch {$conn rollback}
+        if {$RAISEERROR} { error $err }
+        return 0
+    }
+    return 1
+}
+
+# Payment transaction (TPC-C 2.5)
+proc payment { conn w_id w_id_input RAISEERROR fb_storedprocs } {
+    namespace import -force ::tpcccommon::*
+    set d_id [RandomNumber 1 10]
+    set x [RandomNumber 1 100]
+    if {$x <= 85} {
+        set c_d_id $d_id
+        set c_w_id $w_id
+    } else {
+        set c_d_id [RandomNumber 1 10]
+        set c_w_id [RandomNumber 1 $w_id_input]
+        while {$c_w_id == $w_id && $w_id_input != 1} {
+            set c_w_id [RandomNumber 1 $w_id_input]
+        }
+    }
+    set y [RandomNumber 1 100]
+    set byname [expr {$y <= 60 ? 1 : 0}]
+    set h_amount [format "%6.2f" [expr {[RandomNumber 100 500000]/100.0}]]
+    set h_date [fb_iso_ts]
+
+    $conn begintransaction
+    if {[catch {
+        fb_dml $conn {
+            UPDATE WAREHOUSE SET W_YTD = W_YTD + :amount WHERE W_ID = :w_id
+        } [dict create amount $h_amount w_id $w_id]
+        set wRow [fb_select1 $conn {
+            SELECT W_NAME AS W_NAME, W_STREET_1 AS W_STREET_1,
+                   W_STREET_2 AS W_STREET_2, W_CITY AS W_CITY,
+                   W_STATE AS W_STATE, W_ZIP AS W_ZIP
+            FROM WAREHOUSE WHERE W_ID = :w_id
+        } [dict create w_id $w_id]]
+        fb_dml $conn {
+            UPDATE DISTRICT SET D_YTD = D_YTD + :amount
+            WHERE D_W_ID = :w_id AND D_ID = :d_id
+        } [dict create amount $h_amount w_id $w_id d_id $d_id]
+        set dRow [fb_select1 $conn {
+            SELECT D_NAME AS D_NAME, D_STREET_1 AS D_STREET_1,
+                   D_STREET_2 AS D_STREET_2, D_CITY AS D_CITY,
+                   D_STATE AS D_STATE, D_ZIP AS D_ZIP
+            FROM DISTRICT WHERE D_W_ID = :w_id AND D_ID = :d_id
+        } [dict create w_id $w_id d_id $d_id]]
+
+        if {$byname == 1} {
+            set nrnd [NURand 255 0 999 123]
+            set name [randname $nrnd]
+            set cntRow [fb_select1 $conn {
+                SELECT COUNT(*) AS NMATCH FROM CUSTOMER
+                WHERE C_W_ID = :w_id AND C_D_ID = :d_id AND C_LAST = :name
+            } [dict create w_id $c_w_id d_id $c_d_id name $name]]
+            set namecnt [dict get $cntRow NMATCH]
+            if {$namecnt == 0} { set namecnt 1 }
+            set custList [fb_select $conn {
+                SELECT C_ID AS C_ID, C_FIRST AS C_FIRST, C_BALANCE AS C_BALANCE,
+                       C_CREDIT AS C_CREDIT, C_CREDIT_LIM AS C_CREDIT_LIM,
+                       C_DISCOUNT AS C_DISCOUNT, C_DATA AS C_DATA
+                FROM CUSTOMER
+                WHERE C_W_ID = :w_id AND C_D_ID = :d_id AND C_LAST = :name
+                ORDER BY C_FIRST
+            } [dict create w_id $c_w_id d_id $c_d_id name $name]]
+            set midx [expr {($namecnt - 1) / 2}]
+            set custRow [lindex $custList $midx]
+            if {$custRow eq ""} { error "payment: no customer named $name" }
+        } else {
+            set c_id [NURand 1023 1 3000 8191]
+            set custRow [fb_select1 $conn {
+                SELECT C_ID AS C_ID, C_FIRST AS C_FIRST, C_BALANCE AS C_BALANCE,
+                       C_CREDIT AS C_CREDIT, C_CREDIT_LIM AS C_CREDIT_LIM,
+                       C_DISCOUNT AS C_DISCOUNT, C_DATA AS C_DATA
+                FROM CUSTOMER
+                WHERE C_W_ID = :w_id AND C_D_ID = :d_id AND C_ID = :c_id
+            } [dict create w_id $c_w_id d_id $c_d_id c_id $c_id]]
+            if {$custRow eq ""} { error "payment: no customer ($c_w_id,$c_d_id,$c_id)" }
+        }
+        set the_c_id [dict get $custRow C_ID]
+        set new_balance [expr {[dict get $custRow C_BALANCE] - $h_amount}]
+        if {[dict get $custRow C_CREDIT] eq "BC"} {
+            set old_data [dict get $custRow C_DATA]
+            set new_data "$the_c_id $c_d_id $c_w_id $d_id $w_id $h_amount $old_data"
+            set new_data [string range $new_data 0 499]
+            fb_dml $conn {
+                UPDATE CUSTOMER SET
+                    C_BALANCE = :balance,
+                    C_YTD_PAYMENT = C_YTD_PAYMENT + :amount,
+                    C_PAYMENT_CNT = C_PAYMENT_CNT + 1,
+                    C_DATA = :new_data
+                WHERE C_W_ID = :w_id AND C_D_ID = :d_id AND C_ID = :c_id
+            } [dict create balance $new_balance amount $h_amount \
+                new_data $new_data w_id $c_w_id d_id $c_d_id c_id $the_c_id]
+        } else {
+            fb_dml $conn {
+                UPDATE CUSTOMER SET
+                    C_BALANCE = :balance,
+                    C_YTD_PAYMENT = C_YTD_PAYMENT + :amount,
+                    C_PAYMENT_CNT = C_PAYMENT_CNT + 1
+                WHERE C_W_ID = :w_id AND C_D_ID = :d_id AND C_ID = :c_id
+            } [dict create balance $new_balance amount $h_amount \
+                w_id $c_w_id d_id $c_d_id c_id $the_c_id]
+        }
+        set h_data "[dict get $wRow W_NAME]    [dict get $dRow D_NAME]"
+        fb_dml $conn {
+            INSERT INTO HISTORY
+                (H_C_ID, H_C_D_ID, H_C_W_ID, H_W_ID, H_D_ID,
+                 H_DATE, H_AMOUNT, H_DATA)
+            VALUES (:c_id, :c_d_id, :c_w_id, :w_id, :d_id,
+                    :h_date, :h_amount, :h_data)
+        } [dict create c_id $the_c_id c_d_id $c_d_id c_w_id $c_w_id \
+            w_id $w_id d_id $d_id h_date $h_date h_amount $h_amount \
+            h_data $h_data]
+        $conn commit
+    } err]} {
+        catch {$conn rollback}
+        if {$RAISEERROR} { error $err }
+        return 0
+    }
+    return 1
+}
+
+# OrderStatus transaction (TPC-C 2.6) - read-only
+proc ostat { conn w_id RAISEERROR fb_storedprocs } {
+    namespace import -force ::tpcccommon::*
+    set d_id [RandomNumber 1 10]
+    set y [RandomNumber 1 100]
+    set byname [expr {$y <= 60 ? 1 : 0}]
+
+    $conn begintransaction
+    if {[catch {
+        if {$byname == 1} {
+            set nrnd [NURand 255 0 999 123]
+            set name [randname $nrnd]
+            set cntRow [fb_select1 $conn {
+                SELECT COUNT(*) AS NMATCH FROM CUSTOMER
+                WHERE C_W_ID = :w_id AND C_D_ID = :d_id AND C_LAST = :name
+            } [dict create w_id $w_id d_id $d_id name $name]]
+            set namecnt [dict get $cntRow NMATCH]
+            if {$namecnt == 0} { set namecnt 1 }
+            set custList [fb_select $conn {
+                SELECT C_ID AS C_ID, C_FIRST AS C_FIRST, C_BALANCE AS C_BALANCE
+                FROM CUSTOMER
+                WHERE C_W_ID = :w_id AND C_D_ID = :d_id AND C_LAST = :name
+                ORDER BY C_FIRST
+            } [dict create w_id $w_id d_id $d_id name $name]]
+            set custRow [lindex $custList [expr {($namecnt - 1) / 2}]]
+        } else {
+            set c_id [NURand 1023 1 3000 8191]
+            set custRow [fb_select1 $conn {
+                SELECT C_ID AS C_ID, C_FIRST AS C_FIRST, C_BALANCE AS C_BALANCE
+                FROM CUSTOMER
+                WHERE C_W_ID = :w_id AND C_D_ID = :d_id AND C_ID = :c_id
+            } [dict create w_id $w_id d_id $d_id c_id $c_id]]
+        }
+        if {$custRow eq ""} { error "ostat: customer not found" }
+        set the_c_id [dict get $custRow C_ID]
+        set ordRow [fb_select1 $conn {
+            SELECT FIRST 1 O_ID AS O_ID, O_ENTRY_D AS O_ENTRY_D,
+                            O_CARRIER_ID AS O_CARRIER_ID
+            FROM ORDERS
+            WHERE O_W_ID = :w_id AND O_D_ID = :d_id AND O_C_ID = :c_id
+            ORDER BY O_ID DESC
+        } [dict create w_id $w_id d_id $d_id c_id $the_c_id]]
+        if {$ordRow ne ""} {
+            set o_id [dict get $ordRow O_ID]
+            fb_select $conn {
+                SELECT OL_I_ID AS OL_I_ID, OL_SUPPLY_W_ID AS OL_SUPPLY_W_ID,
+                       OL_QUANTITY AS OL_QUANTITY, OL_AMOUNT AS OL_AMOUNT,
+                       OL_DELIVERY_D AS OL_DELIVERY_D
+                FROM ORDER_LINE
+                WHERE OL_W_ID = :w_id AND OL_D_ID = :d_id AND OL_O_ID = :o_id
+            } [dict create w_id $w_id d_id $d_id o_id $o_id]
+        }
+        $conn commit
+    } err]} {
+        catch {$conn rollback}
+        if {$RAISEERROR} { error $err }
+        return 0
+    }
+    return 1
+}
+
+# Delivery transaction (TPC-C 2.7) - iterates 10 districts.
+proc delivery { conn w_id RAISEERROR fb_storedprocs } {
+    namespace import -force ::tpcccommon::*
+    set carrier_id [RandomNumber 1 10]
+    set delivery_d [fb_iso_ts]
+
+    if {[catch {
+        for {set d_id 1} {$d_id <= 10} {incr d_id} {
+            $conn begintransaction
+            if {[catch {
+                set noRow [fb_select1 $conn {
+                    SELECT FIRST 1 NO_O_ID AS NO_O_ID FROM NEW_ORDER
+                    WHERE NO_W_ID = :w_id AND NO_D_ID = :d_id
+                    ORDER BY NO_O_ID
+                } [dict create w_id $w_id d_id $d_id]]
+                if {$noRow eq ""} {
+                    $conn commit
+                    continue
+                }
+                set o_id [dict get $noRow NO_O_ID]
+                fb_dml $conn {
+                    DELETE FROM NEW_ORDER
+                    WHERE NO_W_ID = :w_id AND NO_D_ID = :d_id AND NO_O_ID = :o_id
+                } [dict create w_id $w_id d_id $d_id o_id $o_id]
+                set ordRow [fb_select1 $conn {
+                    SELECT O_C_ID AS O_C_ID FROM ORDERS
+                    WHERE O_W_ID = :w_id AND O_D_ID = :d_id AND O_ID = :o_id
+                } [dict create w_id $w_id d_id $d_id o_id $o_id]]
+                set c_id [dict get $ordRow O_C_ID]
+                fb_dml $conn {
+                    UPDATE ORDERS SET O_CARRIER_ID = :cid
+                    WHERE O_W_ID = :w_id AND O_D_ID = :d_id AND O_ID = :o_id
+                } [dict create cid $carrier_id w_id $w_id d_id $d_id o_id $o_id]
+                fb_dml $conn {
+                    UPDATE ORDER_LINE SET OL_DELIVERY_D = :dd
+                    WHERE OL_W_ID = :w_id AND OL_D_ID = :d_id AND OL_O_ID = :o_id
+                } [dict create dd $delivery_d w_id $w_id d_id $d_id o_id $o_id]
+                set sumRow [fb_select1 $conn {
+                    SELECT SUM(OL_AMOUNT) AS TOTAL FROM ORDER_LINE
+                    WHERE OL_W_ID = :w_id AND OL_D_ID = :d_id AND OL_O_ID = :o_id
+                } [dict create w_id $w_id d_id $d_id o_id $o_id]]
+                set total [dict get $sumRow TOTAL]
+                fb_dml $conn {
+                    UPDATE CUSTOMER SET
+                        C_BALANCE = C_BALANCE + :amt,
+                        C_DELIVERY_CNT = C_DELIVERY_CNT + 1
+                    WHERE C_W_ID = :w_id AND C_D_ID = :d_id AND C_ID = :c_id
+                } [dict create amt $total w_id $w_id d_id $d_id c_id $c_id]
+                $conn commit
+            } innerErr]} {
+                catch {$conn rollback}
+                error $innerErr
+            }
+        }
+    } err]} {
+        if {$RAISEERROR} { error $err }
+        return 0
+    }
+    return 1
+}
+
+# StockLevel transaction (TPC-C 2.8) - read-only
+proc slev { conn w_id stock_level_d_id RAISEERROR fb_storedprocs } {
+    namespace import -force ::tpcccommon::*
+    set threshold [RandomNumber 10 20]
+    $conn begintransaction
+    if {[catch {
+        set distRow [fb_select1 $conn {
+            SELECT D_NEXT_O_ID AS D_NEXT_O_ID FROM DISTRICT
+            WHERE D_W_ID = :w_id AND D_ID = :d_id
+        } [dict create w_id $w_id d_id $stock_level_d_id]]
+        set next_o_id [dict get $distRow D_NEXT_O_ID]
+        fb_select $conn {
+            SELECT COUNT(DISTINCT S_I_ID) AS LOWS
+            FROM ORDER_LINE, STOCK
+            WHERE OL_W_ID = :w_id AND OL_D_ID = :d_id
+              AND OL_O_ID < :hi AND OL_O_ID >= :lo
+              AND S_W_ID = :w_id AND S_I_ID = OL_I_ID
+              AND S_QUANTITY < :thr
+        } [dict create w_id $w_id d_id $stock_level_d_id \
+                       hi $next_o_id lo [expr {$next_o_id - 20}] thr $threshold]
+        $conn commit
+    } err]} {
+        catch {$conn rollback}
+        if {$RAISEERROR} { error $err }
+        return 0
+    }
+    return 1
+}
