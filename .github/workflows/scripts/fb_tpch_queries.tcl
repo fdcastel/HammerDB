@@ -64,22 +64,36 @@ puts "Connected to $dbpath"
 set fails 0
 dict for {qno raw} $queries {
     if {$qno == 15} {
-        # Q15: view + select + drop. Split on `;`, prepare each piece
-        # independently, then drop the view if it survived.
+        # Q15: view + select + drop. The middle SELECT references the
+        # view created in part 1, so PREPAREing it without first
+        # actually creating the view fails ("Table unknown REVENUE..").
+        # Execute parts 1 and 3 (the DDL), prepare-only the SELECT.
         set parts [split [sub_placeholders $raw 9999] ";"]
         set partOk 0
+        set i 0
         foreach p $parts {
             set p [string trim $p]
             if {$p eq ""} { continue }
-            if {[catch {set s [$conn prepare $p]; $s close} err]} {
-                puts stderr "FAIL Q15 part '[string range $p 0 60]...': $err"
-                incr fails
-                break
+            incr i
+            if {$i == 2} {
+                # The SELECT - PREPARE only.
+                if {[catch {set s [$conn prepare $p]; $s close} err]} {
+                    puts stderr "FAIL Q15 select part: $err"
+                    incr fails
+                    break
+                }
+            } else {
+                # CREATE OR ALTER VIEW + DROP VIEW - actually run them.
+                if {[catch {$conn allrows $p} err]} {
+                    puts stderr "FAIL Q15 ddl part '[string range $p 0 60]...': $err"
+                    incr fails
+                    break
+                }
             }
             incr partOk
         }
-        if {$partOk == 3} { puts "OK: Q15 (3 parts prepared)" }
-        # Best-effort cleanup
+        if {$partOk == 3} { puts "OK: Q15 (3 parts prepared/executed)" }
+        # Best-effort cleanup if drop didn't run
         catch {$conn allrows {DROP VIEW REVENUE9999}}
         continue
     }
