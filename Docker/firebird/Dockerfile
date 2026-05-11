@@ -54,8 +54,7 @@ RUN set -eux; \
         echo "Setup=/usr/lib/x86_64-linux-gnu/libOdbcFb.so";  \
         echo "Threading=1";                                 \
         echo "UsageCount=1";                                \
-    } | tee -a /etc/odbcinst.ini; \
-    odbcinst -q -d
+    } | tee -a /etc/odbcinst.ini
 
 # Embedded-mode reminder: applications open the .fdb directly via
 # fbclient.so without contacting a server. config/firebird.xml has

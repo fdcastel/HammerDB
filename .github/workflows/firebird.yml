@@ -39,7 +39,6 @@ jobs:
             ls -la /usr/lib/x86_64-linux-gnu/libfbclient*
             ls -la /usr/lib/x86_64-linux-gnu/libOdbcFb.so
             grep -A1 "Firebird ODBC Driver" /etc/odbcinst.ini
-            odbcinst -q -d
             isql -h || true
           '
 
