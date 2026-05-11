@@ -212,8 +212,20 @@ jobs:
           Import-Module PSFirebird
           New-FirebirdDatabase -Database $fbDb -Force
           $env:FB_DB_PATH = ($fbDb -replace '\\', '/')
+          # Persist for the next step (queries reuse the same .fdb)
+          "FB_TPCH_DB=$($env:FB_DB_PATH)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_tpch_schema.tcl"
           if ($LASTEXITCODE -ne 0) { throw "TPC-H schema build failed with exit $LASTEXITCODE" }
+
+      - name: PREPARE all 22 TPC-H queries against the empty schema
+        shell: pwsh
+        env:
+          FB_ODBC_DRIVER: ${{ env.FIREBIRD_ODBC_DRIVER }}
+          FB_DB_PATH: ${{ env.FB_TPCH_DB }}
+          HAMMERDB_ROOT: ${{ github.workspace }}
+        run: |
+          & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_tpch_queries.tcl"
+          if ($LASTEXITCODE -ne 0) { throw "TPC-H query PREPARE check failed with exit $LASTEXITCODE" }
 
       # Phase G (run hammerdbcli end-to-end) is deferred. The HammerDB
       # Windows release ships as a self-contained .exe with the entire
