@@ -34,7 +34,28 @@ if {[info exists ::env(FB_PASSWORD)] && $::env(FB_PASSWORD) ne ""} {
 }
 puts "connection string: $connStr"
 
-set conn [tdbc::odbc::connection new $connStr]
+# Trap the connection error so we can inspect exactly what the driver
+# returned to tdbc::odbc - on Linux the upstream Firebird ODBC driver
+# (both v3-0-1-release and v3.5.0-rc1) has historically returned an
+# empty SQLSTATE + non-deterministic native code + a single-byte
+# message; we want to see whether the v3.5.1-rc1 patched build
+# changes that.
+if {[catch {tdbc::odbc::connection new $connStr} conn errdict]} {
+    puts stderr "tdbc::odbc::connection failed:"
+    puts stderr "  -message: <<<$conn>>> (strlen=[string length $conn])"
+    foreach k [list -errorcode -errorinfo] {
+        if {[dict exists $errdict $k]} {
+            set v [dict get $errdict $k]
+            puts stderr "  $k: <<<$v>>>"
+        }
+    }
+    # Hex dump the first 64 bytes of the message - reveals embedded
+    # nulls, control characters, anything strcpy would have truncated.
+    binary scan $conn H* hex
+    set hex [string range $hex 0 127]
+    puts stderr "  -message hex (first 64B): $hex"
+    exit 3
+}
 # Firebird upper-cases unquoted identifiers, so tdbc returns dict
 # keys like ONE, not one. Read the first column by position to stay
 # dialect-neutral.
