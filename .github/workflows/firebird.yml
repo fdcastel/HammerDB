@@ -218,6 +218,7 @@ jobs:
       - name: Phase G - download HammerDB 5.0 release + overlay firebird files
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $hdbRoot = Join-Path $env:RUNNER_TEMP 'hammerdb'
           if (Test-Path $hdbRoot) { Remove-Item $hdbRoot -Recurse -Force }
           New-Item -ItemType Directory -Path $hdbRoot | Out-Null
@@ -230,17 +231,28 @@ jobs:
           # Tarball extracts a single top-level dir like HammerDB-5.0
           $inner = Get-ChildItem $hdbRoot -Directory | Select-Object -First 1
           Write-Host "HammerDB extracted to: $($inner.FullName)"
-          # Overlay our checkout's firebird-relevant files
-          Copy-Item -Path "${{ github.workspace }}\src\firebird" -Destination "$($inner.FullName)\src\" -Recurse -Force
-          Copy-Item -Path "${{ github.workspace }}\config\firebird.xml" -Destination "$($inner.FullName)\config\" -Force
-          Copy-Item -Path "${{ github.workspace }}\config\database.xml" -Destination "$($inner.FullName)\config\" -Force
-          Copy-Item -Path "${{ github.workspace }}\scripts\tcl\firebird" -Destination "$($inner.FullName)\scripts\tcl\" -Recurse -Force
-          Copy-Item -Path "${{ github.workspace }}\scripts\python\firebird" -Destination "$($inner.FullName)\scripts\python\" -Recurse -Force
+          Write-Host "Top-level contents:"
+          Get-ChildItem $inner.FullName | Select-Object Mode, Name
+          if (-not (Test-Path "$($inner.FullName)\src")) { throw "expected src/ dir not found in HammerDB extract" }
+          if (-not (Test-Path "$($inner.FullName)\config")) { throw "expected config/ dir not found in HammerDB extract" }
+          if (-not (Test-Path "$($inner.FullName)\scripts\tcl")) { throw "expected scripts/tcl/ dir not found in HammerDB extract" }
+          if (-not (Test-Path "$($inner.FullName)\scripts\python")) { throw "expected scripts/python/ dir not found in HammerDB extract" }
+          # Overlay: copy each new firebird directory/file explicitly.
+          Write-Host "Copying src/firebird"
+          Copy-Item -Path "${{ github.workspace }}\src\firebird" -Destination "$($inner.FullName)\src\firebird" -Recurse -Force
+          Write-Host "Copying config/firebird.xml + database.xml"
+          Copy-Item -Path "${{ github.workspace }}\config\firebird.xml" -Destination "$($inner.FullName)\config\firebird.xml" -Force
+          Copy-Item -Path "${{ github.workspace }}\config\database.xml" -Destination "$($inner.FullName)\config\database.xml" -Force
+          Write-Host "Copying scripts/tcl/firebird"
+          Copy-Item -Path "${{ github.workspace }}\scripts\tcl\firebird" -Destination "$($inner.FullName)\scripts\tcl\firebird" -Recurse -Force
+          Write-Host "Copying scripts/python/firebird"
+          Copy-Item -Path "${{ github.workspace }}\scripts\python\firebird" -Destination "$($inner.FullName)\scripts\python\firebird" -Recurse -Force
           # HammerDB caches database.xml into a SQLite file on first run;
           # delete it so our updated database.xml is re-parsed.
           Get-ChildItem "$($inner.FullName)" -Filter 'database.db' -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force
           # fbclient.dll on PATH already. Persist HammerDB root for the next step.
           "HAMMERDB_BIN_ROOT=$($inner.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Verify firebird overlay:"
           Get-ChildItem "$($inner.FullName)\src\firebird"
           Get-ChildItem "$($inner.FullName)\config\firebird.xml"
 
