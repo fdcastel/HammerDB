@@ -200,3 +200,17 @@ jobs:
         run: |
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_runtxn.tcl"
           if ($LASTEXITCODE -ne 0) { throw "TPC-C transaction run failed with exit $LASTEXITCODE" }
+
+      - name: Build TPC-H schema on a fresh embedded .fdb
+        shell: pwsh
+        env:
+          FB_ODBC_DRIVER: ${{ env.FIREBIRD_ODBC_DRIVER }}
+          HAMMERDB_ROOT: ${{ github.workspace }}
+        run: |
+          $fbDb = Join-Path $env:RUNNER_TEMP 'firebird\tpch_schema.fdb'
+          if (Test-Path $fbDb) { Remove-Item $fbDb -Force }
+          Import-Module PSFirebird
+          New-FirebirdDatabase -Database $fbDb -Force
+          $env:FB_DB_PATH = ($fbDb -replace '\\', '/')
+          & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_tpch_schema.tcl"
+          if ($LASTEXITCODE -ne 0) { throw "TPC-H schema build failed with exit $LASTEXITCODE" }
