@@ -24,9 +24,14 @@ package require xml 1.1
 package require tdbc::odbc
 package require tpchcommon
 
-# tpchcommon::set_dists builds the str-distribution tables. Without
-# this, pick_str_1 and friends get empty lists.
+# tpchcommon::set_dists populates the dist arrays; set_dist_list
+# computes the cumulative weights array consumed by pick_str_1.
+# Without the latter, pick_str_1 fails with
+# `can't read "weights(<name>)": no such variable`.
 ::tpchcommon::set_dists
+foreach dn [array names ::tpchcommon::dists] {
+    ::tpchcommon::set_dist_list $dn
+}
 
 set ::dbdict [::XML::To_Dict [file join $root config database.xml]]
 set ::configfirebird [::XML::To_Dict [file join $root config firebird.xml]]
