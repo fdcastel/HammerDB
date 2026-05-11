@@ -226,17 +226,33 @@ jobs:
           $url = 'https://github.com/TPC-Council/HammerDB/releases/download/v5.0/HammerDB-5.0-Prod-Win.tar.gz'
           Write-Host "Downloading $url"
           Invoke-WebRequest -Uri $url -OutFile $tarball -UseBasicParsing
+          Write-Host ("Tarball size: {0:N0} bytes" -f (Get-Item $tarball).Length)
           Write-Host "Extracting $tarball -> $hdbRoot"
-          tar -xzf $tarball -C $hdbRoot
-          # Tarball extracts a single top-level dir like HammerDB-5.0
-          $inner = Get-ChildItem $hdbRoot -Directory | Select-Object -First 1
-          Write-Host "HammerDB extracted to: $($inner.FullName)"
-          Write-Host "Top-level contents:"
-          Get-ChildItem $inner.FullName | Select-Object Mode, Name
-          if (-not (Test-Path "$($inner.FullName)\src")) { throw "expected src/ dir not found in HammerDB extract" }
-          if (-not (Test-Path "$($inner.FullName)\config")) { throw "expected config/ dir not found in HammerDB extract" }
-          if (-not (Test-Path "$($inner.FullName)\scripts\tcl")) { throw "expected scripts/tcl/ dir not found in HammerDB extract" }
-          if (-not (Test-Path "$($inner.FullName)\scripts\python")) { throw "expected scripts/python/ dir not found in HammerDB extract" }
+          tar -xzf $tarball -C $hdbRoot 2>&1 | Out-Host
+          Write-Host "tar exit code: $LASTEXITCODE"
+          Write-Host "Contents of $($hdbRoot):"
+          Get-ChildItem $hdbRoot -Force | Format-Table Mode, Length, Name | Out-Host
+          # Find the HammerDB root: either flat under $hdbRoot or one nested level.
+          if (Test-Path (Join-Path $hdbRoot 'hammerdbcli.bat')) {
+              $hdbBin = $hdbRoot
+          } elseif (Test-Path (Join-Path $hdbRoot 'hammerdbcli')) {
+              $hdbBin = $hdbRoot
+          } else {
+              $sub = Get-ChildItem $hdbRoot -Directory | Select-Object -First 1
+              if ($null -eq $sub) { throw "HammerDB extract is empty" }
+              Write-Host "Looking for hammerdbcli in $($sub.FullName)"
+              Get-ChildItem $sub.FullName -Force | Format-Table Mode, Length, Name | Out-Host
+              $hdbBin = $sub.FullName
+          }
+          Write-Host "HammerDB binary root: $hdbBin"
+          Write-Host "Recursive listing (depth 2):"
+          Get-ChildItem $hdbBin -Recurse -Depth 1 -Force | Select-Object FullName | Out-Host
+          if (-not (Test-Path "$hdbBin\src")) { throw "expected src/ dir not found at $hdbBin" }
+          if (-not (Test-Path "$hdbBin\config")) { throw "expected config/ dir not found at $hdbBin" }
+          if (-not (Test-Path "$hdbBin\scripts\tcl")) { throw "expected scripts/tcl/ dir not found at $hdbBin" }
+          if (-not (Test-Path "$hdbBin\scripts\python")) { throw "expected scripts/python/ dir not found at $hdbBin" }
+          # Make $inner.FullName style work for the rest of the script
+          $inner = [PSCustomObject]@{ FullName = $hdbBin }
           # Overlay: copy each new firebird directory/file explicitly.
           Write-Host "Copying src/firebird"
           Copy-Item -Path "${{ github.workspace }}\src\firebird" -Destination "$($inner.FullName)\src\firebird" -Recurse -Force
