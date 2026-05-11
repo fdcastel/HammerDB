@@ -29,7 +29,10 @@ package require tpchcommon
 # Without the latter, pick_str_1 fails with
 # `can't read "weights(<name>)": no such variable`.
 ::tpchcommon::set_dists
-foreach dn [array names ::tpchcommon::dists] {
+# `dists` (and `weights`, `dist_names`, `dist_weights`) are GLOBAL
+# variables - the procs use `global dists` rather than living in the
+# tpchcommon namespace. Iterate the global array.
+foreach dn [array names ::dists] {
     ::tpchcommon::set_dist_list $dn
 }
 
