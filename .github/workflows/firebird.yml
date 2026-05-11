@@ -329,14 +329,22 @@ jobs:
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_tpch_load.tcl"
           if ($LASTEXITCODE -ne 0) { throw "throughput load failed with exit $LASTEXITCODE" }
 
-          # The PSFirebird-downloaded security database ships empty;
-          # TCP connections need SYSDBA initialised. Embedded mode
-          # bypasses auth so we can CREATE USER through isql against
-          # the loaded .fdb (the user is stored in the env's security
-          # database, not the .fdb).
-          Write-Host "Initialising SYSDBA in the security database..."
-          "CREATE USER SYSDBA PASSWORD 'masterkey';" |
-              Invoke-FirebirdIsql -Database $fbDb 2>&1 | Out-Host
+          # Modern Firebird (3+) stores users in security<N>.fdb under
+          # the SRP plugin and ships the security DB EMPTY. The
+          # straightforward `CREATE USER SYSDBA` from an embedded
+          # session fails with "No permission for CREATE TABLE
+          # PLG$SRP" because the OS user isn't auto-promoted to
+          # security-DB admin. Workaround: enable Legacy_Auth in
+          # firebird.conf, which uses the older user storage and has
+          # the well-known SYSDBA/masterkey credentials baked in.
+          $fbConf = Join-Path $env:FIREBIRD_HOME 'firebird.conf'
+          Write-Host "Enabling Legacy_Auth in $fbConf..."
+          Write-FirebirdConfiguration -Path $fbConf -Configuration @{
+              'AuthServer'    = 'Legacy_Auth, Srp'
+              'AuthClient'    = 'Legacy_Auth, Srp'
+              'UserManager'   = 'Legacy_UserManager, Srp'
+              'WireCrypt'     = 'Disabled'
+          }
 
           Write-Host "Starting Firebird server on port 3050..."
           $instance = Start-FirebirdInstance -Port 3050
