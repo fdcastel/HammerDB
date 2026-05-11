@@ -36,6 +36,16 @@ foreach dn [array names ::dists] {
     ::tpchcommon::set_dist_list $dn
 }
 
+# tpchcommon::PART_SUPP_BRIDGE assumes integer scale_factor and uses
+# `%`. With a fractional scale (we use 0.01 in CI to keep runtime
+# bounded), 10000*0.01=100.0 is a float and `%` errors. Override
+# locally to coerce to integers - the spec maths is the same.
+proc ::tpchcommon::PART_SUPP_BRIDGE { p s scale_factor } {
+    set tot_scnt [expr {int(10000 * $scale_factor)}]
+    if {$tot_scnt < 1} { set tot_scnt 1 }
+    return [expr {(int($p) + int($s) * ($tot_scnt / 4 + (int($p) - 1) / $tot_scnt)) % $tot_scnt + 1}]
+}
+
 set ::dbdict [::XML::To_Dict [file join $root config database.xml]]
 set ::configfirebird [::XML::To_Dict [file join $root config firebird.xml]]
 foreach f {fbci.tcl fbmet.tcl fbotc.tcl fbopt.tcl fboltp.tcl fbolap.tcl} {
