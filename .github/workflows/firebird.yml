@@ -201,6 +201,16 @@ jobs:
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_runtxn.tcl"
           if ($LASTEXITCODE -ne 0) { throw "TPC-C transaction run failed with exit $LASTEXITCODE" }
 
+      - name: Install + smoke PSQL stored procedures (PAYMENT_SP)
+        shell: pwsh
+        env:
+          FB_ODBC_DRIVER: ${{ env.FIREBIRD_ODBC_DRIVER }}
+          FB_DB_PATH: ${{ env.FB_LOADED_DB }}
+          HAMMERDB_ROOT: ${{ github.workspace }}
+        run: |
+          & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_storedprocs.tcl"
+          if ($LASTEXITCODE -ne 0) { throw "Stored proc smoke failed with exit $LASTEXITCODE" }
+
       - name: Build TPC-H schema on a fresh embedded .fdb
         shell: pwsh
         env:

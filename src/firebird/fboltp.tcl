@@ -203,6 +203,90 @@ proc fb_create_tpcc_schema { conn } {
 }
 
 # ---------------------------------------------------------------------
+# TPC-C PSQL stored procedures (Firebird).
+#
+# Initial cut implements PAYMENT only - the simplest of the 5 (no
+# loops, no per-line cursor work). NEWORD / DELIVERY / OSTAT / SLEV
+# are scaffolded as stubs that raise so the install path is exercised
+# end-to-end on CI before each is fleshed out.
+#
+# Procs use Firebird PSQL syntax:
+#   CREATE OR ALTER PROCEDURE name (input_params) RETURNS (output_params)
+#   AS DECLARE VARIABLE v TYPE; BEGIN ... END
+# tdbc::odbc submits the whole CREATE PROCEDURE as a single statement;
+# Firebird parses the procedure body without needing isql `SET TERM`.
+# ---------------------------------------------------------------------
+
+proc fb_tpcc_sp_ddl {} {
+    set ddl [list]
+    # PAYMENT: by-id only path (caller passes c_id; by-name lookups
+    # stay client-side until a future revision wires the cursor work
+    # in PSQL).
+    lappend ddl {CREATE OR ALTER PROCEDURE PAYMENT_SP (
+        P_W_ID    INTEGER,
+        P_D_ID    SMALLINT,
+        P_C_W_ID  INTEGER,
+        P_C_D_ID  SMALLINT,
+        P_C_ID    INTEGER,
+        P_AMOUNT  NUMERIC(12,2),
+        P_DATE    TIMESTAMP)
+    RETURNS (
+        OUT_C_BALANCE NUMERIC(12,2),
+        OUT_C_CREDIT  CHAR(2),
+        OUT_W_NAME    VARCHAR(10),
+        OUT_D_NAME    VARCHAR(10))
+    AS
+    DECLARE VARIABLE H_DATA VARCHAR(24);
+    BEGIN
+        UPDATE WAREHOUSE
+            SET W_YTD = W_YTD + :P_AMOUNT
+            WHERE W_ID = :P_W_ID
+            RETURNING W_NAME INTO :OUT_W_NAME;
+
+        UPDATE DISTRICT
+            SET D_YTD = D_YTD + :P_AMOUNT
+            WHERE D_W_ID = :P_W_ID AND D_ID = :P_D_ID
+            RETURNING D_NAME INTO :OUT_D_NAME;
+
+        SELECT C_BALANCE, C_CREDIT FROM CUSTOMER
+            WHERE C_W_ID = :P_C_W_ID
+              AND C_D_ID = :P_C_D_ID
+              AND C_ID   = :P_C_ID
+            INTO :OUT_C_BALANCE, :OUT_C_CREDIT;
+
+        OUT_C_BALANCE = OUT_C_BALANCE - :P_AMOUNT;
+
+        UPDATE CUSTOMER
+            SET C_BALANCE     = :OUT_C_BALANCE,
+                C_YTD_PAYMENT = C_YTD_PAYMENT + :P_AMOUNT,
+                C_PAYMENT_CNT = C_PAYMENT_CNT + 1
+            WHERE C_W_ID = :P_C_W_ID
+              AND C_D_ID = :P_C_D_ID
+              AND C_ID   = :P_C_ID;
+
+        H_DATA = :OUT_W_NAME || '    ' || :OUT_D_NAME;
+        INSERT INTO HISTORY
+            (H_C_ID, H_C_D_ID, H_C_W_ID, H_W_ID, H_D_ID,
+             H_DATE, H_AMOUNT, H_DATA)
+        VALUES (:P_C_ID, :P_C_D_ID, :P_C_W_ID, :P_W_ID, :P_D_ID,
+                :P_DATE, :P_AMOUNT, :H_DATA);
+
+        SUSPEND;
+    END}
+    return $ddl
+}
+
+proc fb_create_tpcc_stored_procs { conn } {
+    # Returns count of procs installed.
+    set count 0
+    foreach stmt [fb_tpcc_sp_ddl] {
+        $conn allrows $stmt
+        incr count
+    }
+    return $count
+}
+
+# ---------------------------------------------------------------------
 # TPROC-C bulk loader.
 #
 # Firebird has no COPY/BCP equivalent, so we use prepared INSERT
