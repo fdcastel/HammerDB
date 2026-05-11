@@ -29,48 +29,84 @@ foreach f {fbci.tcl fbmet.tcl fbotc.tcl fbopt.tcl fboltp.tcl fbolap.tcl} {
 set conn [ConnectToFirebird $driver true "" "" $dbpath SYSDBA "" UTF8]
 puts "Connected to $dbpath"
 
-# Note: PAYMENT_SP install is handled by the workflow step that runs
-# Invoke-FirebirdIsql against fb_payment_sp.sql - tdbc::odbc cannot
-# submit a CREATE PROCEDURE body that references PSQL variables with
-# `:NAME` syntax (the prepare scanner treats those as parameter
-# placeholders). Here we just verify and exercise the installed proc.
+# Procedures are installed by the workflow's isql step (tdbc::odbc
+# cannot submit a CREATE PROCEDURE that references PSQL variables -
+# the prepare scanner mis-treats `:NAME` as bind placeholders). Here
+# we just verify presence and exercise each one.
 
-# Verify PAYMENT_SP exists in the catalog
-set found 0
+set expected {PAYMENT_SP OSTAT_SP SLEV_SP DELIVERY_SP NEWORD_SP}
+set actual [list]
 $conn foreach -as lists row {
     SELECT TRIM(RDB$PROCEDURE_NAME) FROM RDB$PROCEDURES
     WHERE RDB$SYSTEM_FLAG = 0
-} { if {[lindex $row 0] eq "PAYMENT_SP"} { set found 1 } }
-if {!$found} {
-    puts stderr "FAIL: PAYMENT_SP not in RDB\$PROCEDURES"
-    $conn close
-    exit 3
+    ORDER BY RDB$PROCEDURE_NAME
+} { lappend actual [lindex $row 0] }
+foreach p $expected {
+    if {$p ni $actual} {
+        puts stderr "FAIL: $p missing from RDB\$PROCEDURES (have: $actual)"
+        $conn close
+        exit 3
+    }
 }
-puts "OK: PAYMENT_SP visible in RDB\$PROCEDURES"
+puts "OK: all 5 procs visible: $actual"
 
-# Invoke PAYMENT_SP for warehouse 1 / district 1 / customer 1.
-# PAYMENT_SP uses SUSPEND so it is a "selectable procedure" - call it
-# via SELECT FROM rather than EXECUTE PROCEDURE so tdbc::odbc accepts
-# the statement.
-$conn begintransaction
 set ts [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"]
-set rs [$conn prepare {
+set fails 0
+
+# Helper: run a single SELECT FROM <proc>(...), log first row.
+proc fbsp_call { conn label sql params } {
+    upvar 1 fails fails
+    if {[catch {
+        $conn begintransaction
+        set rs [$conn prepare $sql]
+        set out [$rs execute $params]
+        set rows [list]
+        $out foreach -as dicts -- r { lappend rows $r }
+        $out close
+        $rs close
+        $conn commit
+    } err]} {
+        catch {$conn rollback}
+        puts stderr "FAIL $label: $err"
+        incr fails
+        return
+    }
+    if {[llength $rows] == 0} {
+        puts stderr "FAIL $label: no rows returned"
+        incr fails
+        return
+    }
+    puts "OK: $label returned [lindex $rows 0]"
+}
+
+fbsp_call $conn PAYMENT_SP {
     SELECT OUT_C_BALANCE, OUT_C_CREDIT, OUT_W_NAME, OUT_D_NAME
     FROM PAYMENT_SP(:w_id, :d_id, :cw_id, :cd_id, :c_id, :amt, :ts)
-}]
-set out [$rs execute [dict create w_id 1 d_id 1 cw_id 1 cd_id 1 c_id 1 amt 12.34 ts $ts]]
-set rows [list]
-$out foreach -as dicts -- r { lappend rows $r }
-$out close
-$rs close
-$conn commit
+} [dict create w_id 1 d_id 1 cw_id 1 cd_id 1 c_id 1 amt 12.34 ts $ts]
 
-if {[llength $rows] == 0} {
-    puts stderr "FAIL: PAYMENT_SP returned no rows"
-    $conn close
-    exit 3
-}
-puts "OK: PAYMENT_SP returned [lindex $rows 0]"
+fbsp_call $conn OSTAT_SP {
+    SELECT OUT_C_BALANCE, OUT_O_ID, OUT_O_ENTRY_D, OUT_O_CARRIER_ID
+    FROM OSTAT_SP(:w_id, :d_id, :c_id)
+} [dict create w_id 1 d_id 1 c_id 1]
+
+fbsp_call $conn SLEV_SP {
+    SELECT OUT_LOWS FROM SLEV_SP(:w_id, :d_id, :thr)
+} [dict create w_id 1 d_id 1 thr 15]
+
+fbsp_call $conn DELIVERY_SP {
+    SELECT OUT_DISTRICT_COUNT
+    FROM DELIVERY_SP(:w_id, :carrier, :dd)
+} [dict create w_id 1 carrier 1 dd $ts]
+
+fbsp_call $conn NEWORD_SP {
+    SELECT OUT_O_ID, OUT_TOTAL
+    FROM NEWORD_SP(:w_id, :d_id, :c_id, :ol_cnt, :dt)
+} [dict create w_id 1 d_id 1 c_id 1 ol_cnt 5 dt $ts]
 
 $conn close
-puts "OK: stored-proc smoke verified"
+
+if {$fails > 0} {
+    puts stderr "$fails proc(s) failed"
+    exit 3
+}
+puts "OK: all 5 PSQL stored procs verified"
