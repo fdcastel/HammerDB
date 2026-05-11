@@ -144,3 +144,21 @@ if {$fails > 0 || $qfails > 0} {
     exit 3
 }
 puts "OK: TPROC-H load + query smoke verified (scale=$scale)"
+
+# Structured results
+if {[info exists ::env(FB_RESULTS_OUT)] && $::env(FB_RESULTS_OUT) ne ""} {
+    set fd [open $::env(FB_RESULTS_OUT) w]
+    puts -nonewline $fd "{\"test\":\"tpch_load\",\"scale\":$scale,\"lineitem_rows\":$olCount,\"row_counts\":{\"REGION\":5,\"NATION\":25,\"SUPPLIER\":$expectedSup,\"CUSTOMER\":$expectedCust,\"PART\":$expectedPart,\"PARTSUPP\":$expectedPS,\"ORDERS\":$expectedOrd,\"LINEITEM\":$olCount}}"
+    close $fd
+}
+if {[info exists ::env(GITHUB_STEP_SUMMARY)] && $::env(GITHUB_STEP_SUMMARY) ne ""} {
+    set md "## TPC-H Load (scale $scale) + Query Smoke\n\n"
+    append md "| Table | Rows |\n| --- | ---: |\n"
+    append md "| REGION | 5 |\n| NATION | 25 |\n| SUPPLIER | $expectedSup |\n"
+    append md "| CUSTOMER | $expectedCust |\n| PART | $expectedPart |\n| PARTSUPP | $expectedPS |\n"
+    append md "| ORDERS | $expectedOrd |\n| LINEITEM | $olCount |\n\n"
+    append md "Q1, Q5, Q14 executed against loaded data (see job log for per-query timings).\n\n"
+    set fd [open $::env(GITHUB_STEP_SUMMARY) a]
+    puts $fd $md
+    close $fd
+}

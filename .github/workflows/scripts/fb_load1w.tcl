@@ -83,3 +83,20 @@ if {$fails > 0} {
     exit 3
 }
 puts "OK: 1-warehouse TPC-C load verified"
+
+# Structured results for actions/upload-artifact + step summary
+if {[info exists ::env(FB_RESULTS_OUT)] && $::env(FB_RESULTS_OUT) ne ""} {
+    set fd [open $::env(FB_RESULTS_OUT) w]
+    puts -nonewline $fd "{\"test\":\"tpcc_load_1w\",\"warehouses\":1,\"order_line_rows\":$olCount,\"row_counts\":{\"WAREHOUSE\":1,\"DISTRICT\":10,\"CUSTOMER\":30000,\"HISTORY\":30000,\"ITEM\":100000,\"STOCK\":100000,\"ORDERS\":30000,\"NEW_ORDER\":9000,\"ORDER_LINE\":$olCount}}"
+    close $fd
+}
+if {[info exists ::env(GITHUB_STEP_SUMMARY)] && $::env(GITHUB_STEP_SUMMARY) ne ""} {
+    set md "## TPC-C 1-Warehouse Load\n\n"
+    append md "| Table | Rows |\n| --- | ---: |\n"
+    append md "| WAREHOUSE | 1 |\n| DISTRICT | 10 |\n| CUSTOMER | 30,000 |\n"
+    append md "| HISTORY | 30,000 |\n| ITEM | 100,000 |\n| STOCK | 100,000 |\n"
+    append md "| ORDERS | 30,000 |\n| NEW_ORDER | 9,000 |\n| ORDER_LINE | $olCount |\n\n"
+    set fd [open $::env(GITHUB_STEP_SUMMARY) a]
+    puts $fd $md
+    close $fd
+}

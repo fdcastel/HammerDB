@@ -110,3 +110,19 @@ if {$fails > 0} {
     exit 3
 }
 puts "OK: all 5 PSQL stored procs verified"
+
+# Structured results
+if {[info exists ::env(FB_RESULTS_OUT)] && $::env(FB_RESULTS_OUT) ne ""} {
+    set fd [open $::env(FB_RESULTS_OUT) w]
+    puts -nonewline $fd "{\"test\":\"tpcc_stored_procs\",\"procs_installed\":5,\"procs_invoked_ok\":5,\"failures\":$fails}"
+    close $fd
+}
+if {[info exists ::env(GITHUB_STEP_SUMMARY)] && $::env(GITHUB_STEP_SUMMARY) ne ""} {
+    set md "## TPC-C PSQL Stored Procedures\n\n"
+    append md "All 5 procedures installed via Invoke-FirebirdIsql and invoked via tdbc::odbc SELECT FROM (selectable procs):\n\n"
+    append md "- PAYMENT_SP\n- OSTAT_SP\n- SLEV_SP\n- DELIVERY_SP\n- NEWORD_SP\n\n"
+    append md "Failures: $fails\n\n"
+    set fd [open $::env(GITHUB_STEP_SUMMARY) a]
+    puts $fd $md
+    close $fd
+}

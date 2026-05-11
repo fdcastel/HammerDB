@@ -108,3 +108,29 @@ if {$fails > 0} {
     exit 3
 }
 puts "OK: TPROC-H power test verified"
+
+# Structured results
+set rf1_rows [dict get $result rf1_rows]
+set rf1_ms [dict get $result rf1_ms]
+set rf2_rows [dict get $result rf2_rows]
+set rf2_ms [dict get $result rf2_ms]
+set qwr [dict get $result queries_with_rows]
+set gmean [format "%.2f" [dict get $result gmean_ms]]
+if {[info exists ::env(FB_RESULTS_OUT)] && $::env(FB_RESULTS_OUT) ne ""} {
+    set fd [open $::env(FB_RESULTS_OUT) w]
+    puts -nonewline $fd "{\"test\":\"tpch_power\",\"scale\":$scale,\"elapsed_ms\":$total,\"rf1_rows\":$rf1_rows,\"rf1_ms\":$rf1_ms,\"rf2_rows\":$rf2_rows,\"rf2_ms\":$rf2_ms,\"queries_with_rows\":$qwr,\"gmean_ms\":$gmean}"
+    close $fd
+}
+if {[info exists ::env(GITHUB_STEP_SUMMARY)] && $::env(GITHUB_STEP_SUMMARY) ne ""} {
+    set md "## TPC-H Power Test\n\n"
+    append md "| Metric | Value |\n| --- | ---: |\n"
+    append md "| Scale | $scale |\n"
+    append md "| Total elapsed | ${total} ms |\n"
+    append md "| RF1 (insert) | $rf1_rows rows in ${rf1_ms} ms |\n"
+    append md "| RF2 (delete) | $rf2_rows rows in ${rf2_ms} ms |\n"
+    append md "| Queries returning rows | $qwr / 22 |\n"
+    append md "| Geometric mean | ${gmean} ms |\n\n"
+    set fd [open $::env(GITHUB_STEP_SUMMARY) a]
+    puts $fd $md
+    close $fd
+}

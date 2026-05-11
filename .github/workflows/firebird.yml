@@ -99,6 +99,14 @@ jobs:
           Write-Host "Registered Firebird ODBC driver: $found"
           "FIREBIRD_ODBC_DRIVER=$found" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Prepare results directory for benchmark JSON artifacts
+        shell: pwsh
+        run: |
+          $resultsDir = Join-Path $env:RUNNER_TEMP 'firebird-results'
+          New-Item -ItemType Directory -Path $resultsDir -Force | Out-Null
+          "FB_RESULTS_DIR=$resultsDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Benchmark results will be written to $resultsDir"
+
       - name: Install Tcl/Tk (Magicsplat) for tdbc::odbc smoke test
         shell: pwsh
         run: |
@@ -208,6 +216,7 @@ jobs:
         env:
           FB_ODBC_DRIVER: ${{ env.FIREBIRD_ODBC_DRIVER }}
           HAMMERDB_ROOT: ${{ github.workspace }}
+          FB_RESULTS_OUT: ${{ env.FB_RESULTS_DIR }}/tpcc-load-1w.json
         run: |
           $fbDb = Join-Path $env:RUNNER_TEMP 'firebird\tpcc_load.fdb'
           if (Test-Path $fbDb) { Remove-Item $fbDb -Force }
@@ -226,6 +235,7 @@ jobs:
           FB_DB_PATH: ${{ env.FB_LOADED_DB }}
           FB_TXN_COUNT: "200"
           HAMMERDB_ROOT: ${{ github.workspace }}
+          FB_RESULTS_OUT: ${{ env.FB_RESULTS_DIR }}/tpcc-transactions.json
         run: |
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_runtxn.tcl"
           if ($LASTEXITCODE -ne 0) { throw "TPC-C transaction run failed with exit $LASTEXITCODE" }
@@ -250,6 +260,7 @@ jobs:
           FB_ODBC_DRIVER: ${{ env.FIREBIRD_ODBC_DRIVER }}
           FB_DB_PATH: ${{ env.FB_LOADED_DB }}
           HAMMERDB_ROOT: ${{ github.workspace }}
+          FB_RESULTS_OUT: ${{ env.FB_RESULTS_DIR }}/tpcc-stored-procs.json
         run: |
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_storedprocs.tcl"
           if ($LASTEXITCODE -ne 0) { throw "Stored proc smoke failed with exit $LASTEXITCODE" }
@@ -286,6 +297,7 @@ jobs:
           FB_ODBC_DRIVER: ${{ env.FIREBIRD_ODBC_DRIVER }}
           HAMMERDB_ROOT: ${{ github.workspace }}
           FB_TPCH_SCALE: "0.01"
+          FB_RESULTS_OUT: ${{ env.FB_RESULTS_DIR }}/tpch-load.json
         run: |
           $fbDb = Join-Path $env:RUNNER_TEMP 'firebird\tpch_load.fdb'
           if (Test-Path $fbDb) { Remove-Item $fbDb -Force }
@@ -303,6 +315,7 @@ jobs:
           FB_ODBC_DRIVER: ${{ env.FIREBIRD_ODBC_DRIVER }}
           FB_DB_PATH: ${{ env.FB_TPCH_LOADED_DB }}
           HAMMERDB_ROOT: ${{ github.workspace }}
+          FB_RESULTS_OUT: ${{ env.FB_RESULTS_DIR }}/tpch-power.json
         run: |
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_tpch_power.tcl"
           if ($LASTEXITCODE -ne 0) { throw "TPC-H power test failed with exit $LASTEXITCODE" }
@@ -365,10 +378,7 @@ jobs:
           if (-not $ready) { throw "Firebird server did not bind port 3050 within 15s" }
           Write-Host "Firebird server PID $($instance.Process.Id) ready"
 
-          $resultsJson = Join-Path $env:RUNNER_TEMP 'tpch-throughput.json'
-          # Persist the artifact path BEFORE the test runs, so the
-          # upload-artifact step has it even if the test fails.
-          "FB_TPCH_THROUGHPUT_JSON=$resultsJson" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $resultsJson = Join-Path $env:FB_RESULTS_DIR 'tpch-throughput.json'
           $env:FB_TPCH_SERVER_HOST = "localhost"
           $env:FB_TPCH_SERVER_PORT = "3050"
           $env:FB_TPCH_DBPATH = $fbDb
@@ -387,12 +397,12 @@ jobs:
               }
           }
 
-      - name: Upload TPC-H throughput results
+      - name: Upload all Firebird benchmark results
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: tpch-throughput-results
-          path: ${{ env.FB_TPCH_THROUGHPUT_JSON }}
+          name: firebird-benchmark-results
+          path: ${{ env.FB_RESULTS_DIR }}/*.json
           if-no-files-found: warn
 
       # Phase G (run hammerdbcli end-to-end) is deferred. The HammerDB

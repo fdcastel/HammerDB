@@ -80,3 +80,34 @@ if {[dict get $counts neword] == 0} {
     exit 3
 }
 puts "OK: client-side TPC-C driver procs verified ($failures rollbacks within 10% threshold)"
+
+# Structured results
+set tps [format "%.1f" [expr {$count * 1000.0 / $elapsed}]]
+set neword_count [dict get $counts neword]
+set payment_count [dict get $counts payment]
+set delivery_count [dict get $counts delivery]
+set ostat_count [dict get $counts ostat]
+set slev_count [dict get $counts slev]
+if {[info exists ::env(FB_RESULTS_OUT)] && $::env(FB_RESULTS_OUT) ne ""} {
+    set fd [open $::env(FB_RESULTS_OUT) w]
+    puts -nonewline $fd "{\"test\":\"tpcc_transactions\",\"count\":$count,\"elapsed_ms\":$elapsed,\"tps\":$tps,\"failures\":$failures,\"mix\":{\"neword\":$neword_count,\"payment\":$payment_count,\"delivery\":$delivery_count,\"ostat\":$ostat_count,\"slev\":$slev_count}}"
+    close $fd
+}
+if {[info exists ::env(GITHUB_STEP_SUMMARY)] && $::env(GITHUB_STEP_SUMMARY) ne ""} {
+    set md "## TPC-C Client-Side Transaction Mix\n\n"
+    append md "| Metric | Value |\n| --- | ---: |\n"
+    append md "| Total transactions | $count |\n"
+    append md "| Elapsed | ${elapsed} ms |\n"
+    append md "| Throughput | ${tps} tps |\n"
+    append md "| Rollbacks | $failures |\n\n"
+    append md "### Transaction mix\n\n"
+    append md "| Type | Count |\n| --- | ---: |\n"
+    append md "| NewOrder | $neword_count |\n"
+    append md "| Payment | $payment_count |\n"
+    append md "| Delivery | $delivery_count |\n"
+    append md "| OrderStatus | $ostat_count |\n"
+    append md "| StockLevel | $slev_count |\n\n"
+    set fd [open $::env(GITHUB_STEP_SUMMARY) a]
+    puts $fd $md
+    close $fd
+}
