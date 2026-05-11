@@ -692,6 +692,101 @@ proc fb_tpch_sub_query { query_no scale_factor myposition } {
     return $q
 }
 
+# ---------------------------------------------------------------------
+# Multi-VU throughput test (TPC-C 5.3.5).
+#
+# The companion to the power test: N concurrent QUERY streams, each
+# running its own permuted ordering of the 22 queries, run in
+# parallel with a single REFRESH stream that loops RF1/RF2 pairs.
+# Reports per-stream gmean + the overall elapsed.
+#
+# Embedded Firebird allows only one process to open a .fdb on disk,
+# so the throughput test cannot use the embedded engine. The CI
+# script (fb_tpch_throughput.tcl) launches a server instance via
+# PSFirebird's Start-FirebirdInstance and connects every Tcl thread
+# over inet://. fb_build_connstr already supports server mode when
+# fb_embedded=false.
+#
+# fb_tpch_query_stream / fb_tpch_refresh_loop are the worker bodies
+# the CI script sends to each Tcl thread. fbolap.tcl itself does NOT
+# spawn threads - keeping the threading orchestration in the CI
+# script makes it easier to fold in alternative drivers (HammerDB
+# vuset/vurun, etc.) later without touching this file.
+# ---------------------------------------------------------------------
+
+proc fb_tpch_query_stream { conn scale_factor myposition {verbose false} } {
+    namespace import -force ::tpchcommon::*
+    set qorder [ordered_set $myposition]
+    set qtimes [dict create]
+    set qrows [dict create]
+    set timings [list]
+    foreach qno $qorder {
+        set sql [fb_tpch_sub_query $qno $scale_factor [expr {$myposition + 1}]]
+        set t0 [clock milliseconds]
+        set rows 0
+        if {$qno == 15} {
+            set parts [split $sql ";"]
+            set i 0
+            foreach p $parts {
+                set p [string trim $p]
+                if {$p eq ""} { continue }
+                incr i
+                if {$i == 2} {
+                    set t0 [clock milliseconds]
+                    set rs [$conn prepare $p]
+                    $rs foreach -as lists row { incr rows }
+                    $rs close
+                } else {
+                    catch {$conn allrows $p}
+                }
+            }
+        } else {
+            if {[catch {
+                set rs [$conn prepare $sql]
+                $rs foreach -as lists row { incr rows }
+                $rs close
+            } err]} {
+                if {$verbose} { puts stderr "stream $myposition Q$qno failed: $err" }
+                set rows -1
+            }
+        }
+        set elapsed [expr {[clock milliseconds] - $t0}]
+        dict set qtimes $qno $elapsed
+        dict set qrows $qno $rows
+        if {$rows > 0} { lappend timings $elapsed }
+    }
+    return [dict create \
+        myposition $myposition \
+        query_order $qorder \
+        query_times_ms $qtimes \
+        query_rows $qrows \
+        gmean_ms [expr {[llength $timings] > 0 ? [gmean $timings] : 0}] \
+        queries_with_rows [llength $timings]]
+}
+
+proc fb_tpch_refresh_loop { conn scale_factor base_upd_num stop_tsv } {
+    # Loops (RF1, RF2) pairs against the given connection until the
+    # named tsv variable in the application namespace becomes 1. Each
+    # pair uses its own upd_num so subsequent inserts don't collide
+    # with prior refresh sets.
+    namespace import -force ::tpchcommon::*
+    set pairs 0
+    set upd $base_upd_num
+    while {1} {
+        if {[tsv::get application $stop_tsv]} { break }
+        incr upd
+        if {[catch {
+            fb_tpch_rf1 $conn $scale_factor $upd
+            fb_tpch_rf2 $conn $scale_factor $upd
+        } err]} {
+            puts stderr "refresh-loop pair $pairs ($upd) failed: $err"
+            break
+        }
+        incr pairs
+    }
+    return [dict create pairs_completed $pairs last_upd_num $upd]
+}
+
 proc fb_tpch_power_test { conn scale_factor {myposition 0} {verbose false} } {
     # Run RF1, then the 22 queries in the spec'd order for this stream
     # position, then RF2. Returns dict with per-query timings (ms),

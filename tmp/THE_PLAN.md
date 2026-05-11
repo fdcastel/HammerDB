@@ -20,6 +20,12 @@ This is a living tracker. **Update it every time work moves forward** — do not
 | ❌ OPEN | Not yet addressed |
 | ⏯️ DEFERRED | Delayed or on hold (note the blocker in `Notes / Files`) |
 
+### TPC-H multi-VU throughput test (C11 follow-up)
+
+| # | Status | Commit | Task | Notes / Files |
+|---|---|---|---|---|
+| C11b | 🔧 IN PROGRESS |  | Multi-VU throughput test (server mode) | `fb_tpch_query_stream` + `fb_tpch_refresh_loop` workers in fbolap.tcl. CI orchestrator `fb_tpch_throughput.tcl` spawns N Tcl threads via `Thread`, each connects via `inet://localhost:3050` (server mode is required because Firebird Embedded is single-process). Workflow step starts a Firebird server via `Start-FirebirdInstance`, runs the test, stops the server. Results written to JSON + `$GITHUB_STEP_SUMMARY`; uploaded as `tpch-throughput-results` workflow artifact. |
+
 ### Locked decisions (do not relitigate without updating this header)
 
 - **Tcl driver:** `tdbc::odbc` against the official Firebird ODBC driver. No new C extension. Mirror MSSQL's pattern in `src/mssqls/`.

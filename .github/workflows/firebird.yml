@@ -307,6 +307,76 @@ jobs:
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_tpch_power.tcl"
           if ($LASTEXITCODE -ne 0) { throw "TPC-H power test failed with exit $LASTEXITCODE" }
 
+      - name: Run TPROC-H throughput test (server mode, multi-VU)
+        shell: pwsh
+        env:
+          FB_ODBC_DRIVER: ${{ env.FIREBIRD_ODBC_DRIVER }}
+          HAMMERDB_ROOT: ${{ github.workspace }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module PSFirebird
+
+          # Embedded mode is single-process, so we cannot share the
+          # already-loaded .fdb. Provision a dedicated .fdb and load
+          # it via embedded first, then start a Firebird server on
+          # port 3050 pointing at it for the multi-VU test.
+          $fbDb = Join-Path $env:RUNNER_TEMP 'firebird\tpch_throughput.fdb'
+          if (Test-Path $fbDb) { Remove-Item $fbDb -Force }
+          New-FirebirdDatabase -Database $fbDb -Force
+          $env:FB_DB_PATH = ($fbDb -replace '\\', '/')
+          $env:FB_TPCH_SCALE = "0.01"
+          Write-Host "Loading throughput .fdb (scale 0.01) via embedded..."
+          & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_tpch_load.tcl"
+          if ($LASTEXITCODE -ne 0) { throw "throughput load failed with exit $LASTEXITCODE" }
+
+          Write-Host "Starting Firebird server on port 3050..."
+          $instance = Start-FirebirdInstance -Port 3050
+          # Give the server a moment to bind the port. PSFirebird's
+          # cmdlet returns immediately after Start-Process; the actual
+          # listener takes 1-3s to come up.
+          $ready = $false
+          for ($i = 0; $i -lt 30; $i++) {
+              Start-Sleep -Milliseconds 500
+              try {
+                  $tcp = New-Object System.Net.Sockets.TcpClient
+                  $tcp.Connect('127.0.0.1', 3050)
+                  $tcp.Close()
+                  $ready = $true
+                  break
+              } catch { }
+          }
+          if (-not $ready) { throw "Firebird server did not bind port 3050 within 15s" }
+          Write-Host "Firebird server PID $($instance.Process.Id) ready"
+
+          $resultsJson = Join-Path $env:RUNNER_TEMP 'tpch-throughput.json'
+          $env:FB_TPCH_SERVER_HOST = "localhost"
+          $env:FB_TPCH_SERVER_PORT = "3050"
+          $env:FB_TPCH_DBPATH = $fbDb
+          $env:FB_TPCH_STREAMS = "2"
+          $env:FB_TPCH_RESULTS_OUT = $resultsJson
+
+          try {
+              & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_tpch_throughput.tcl"
+              if ($LASTEXITCODE -ne 0) { throw "throughput test failed with exit $LASTEXITCODE" }
+          } finally {
+              Write-Host "Stopping Firebird server..."
+              try { Stop-FirebirdInstance -Id $instance.Process.Id } catch {
+                  Write-Warning "Stop-FirebirdInstance failed: $_"
+                  # Fall back to taskkill if PSFirebird couldn't stop it.
+                  try { Stop-Process -Id $instance.Process.Id -Force -ErrorAction SilentlyContinue } catch {}
+              }
+          }
+          # Persist the artifact path for the next step.
+          "FB_TPCH_THROUGHPUT_JSON=$resultsJson" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Upload TPC-H throughput results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tpch-throughput-results
+          path: ${{ env.FB_TPCH_THROUGHPUT_JSON }}
+          if-no-files-found: warn
+
       # Phase G (run hammerdbcli end-to-end) is deferred. The HammerDB
       # Windows release ships as a self-contained .exe with the entire
       # source/lib tree bundled via zipfs - the binary can't be patched
