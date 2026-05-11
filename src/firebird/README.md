@@ -177,25 +177,28 @@ The JSON files emitted per run:
 
 ## Deferred items
 
-Tracked individually in `tmp/THE_PLAN.md`, summarised here:
-
-* **Full GUI options dialog** (C1 in the plan). The `setlocalfbtpccvars` /
+* **Full GUI options dialog.** The `setlocalfbtpccvars` /
   `setlocalfbtpchvars` helpers are wired up so `fboltp.tcl` /
   `fbolap.tcl` can read settings from `configfirebird`, but the
   Tk-based connection / TPROC-C / TPROC-H tabs (mirroring
   `src/postgresql/pgopt.tcl`) are not built yet.
-* **Real `tcount_fb`** (C12). The current proc is a stub. A real
+* **Real `tcount_fb`.** The current proc is a stub. A real
   implementation would poll `MON$STATEMENTS` from a background thread
   to feed the GUI's TPM/NOPM display.
-* **`hammerdbcli` end-to-end on CI** (Phase G in the plan). Permanently
-  blocked unless the upstream Windows `.exe` is rebuilt with our
-  Firebird files (the binary uses Tcl `zipfs` to bundle src/, modules/
-  etc., so on-disk overlays are ignored). The standalone tdbc::odbc
-  CI verifications cover the same code paths.
-* **Linux smoke run inside the Docker image** (F4 second-half). The
-  `ubuntu-latest` job builds the image and inspects the installed
-  files, but does not run the full smoke against a `.fdb` inside the
-  container yet.
+* **`hammerdbcli` end-to-end on CI.** Permanently blocked unless the
+  upstream Windows `.exe` is rebuilt with our Firebird files (the
+  binary uses Tcl `zipfs` to bundle src/, modules/ etc., so on-disk
+  overlays are ignored). The standalone tdbc::odbc CI verifications
+  cover the same code paths.
+* **Linux SQL coverage in CI.** The `ubuntu-latest` job builds the
+  Docker image and verifies that `libfbclient`, `libOdbcFb.so` and
+  `tdbc::odbc` load, but does not exercise SQL round-trips. The
+  upstream Linux build of the Firebird ODBC driver (verified on both
+  `v3-0-1-release` and `v3.5.0-rc1`) returns a garbled diagnostic
+  record on every failed `SQLDriverConnect` — empty SQLSTATE,
+  non-deterministic native code, and a message truncated to a single
+  `[` character — which makes the driver unusable behind `tdbc::odbc`
+  on Linux. The full SQL/PSQL path is covered on Windows only.
 
 ## Local testing
 

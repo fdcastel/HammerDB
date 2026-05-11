@@ -11,7 +11,6 @@ on:
       - "config/database.xml"
       - "config/ci.xml"
       - "Docker/firebird/**"
-      - "tmp/THE_PLAN.md"
       - ".github/workflows/firebird.yml"
   push:
     branches:
@@ -415,9 +414,10 @@ jobs:
           path: ${{ env.FB_RESULTS_DIR }}/*.json
           if-no-files-found: warn
 
-      # Phase G (run hammerdbcli end-to-end) is deferred. The HammerDB
+      # Running hammerdbcli end-to-end is deferred: the HammerDB
       # Windows release ships as a self-contained .exe with the entire
-      # source/lib tree bundled via zipfs - the binary can't be patched
-      # to use our updated src/firebird/ and config/database.xml without
-      # rebuilding the .exe via the Bawt build system. Tracking under
-      # THE_PLAN.md G2/G4.
+      # source/lib tree bundled via zipfs - the binary can't be
+      # patched to use our updated src/firebird/ and
+      # config/database.xml without rebuilding the .exe via the Bawt
+      # build system. The standalone tdbc::odbc CI verifications above
+      # cover the same code paths.

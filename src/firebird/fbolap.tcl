@@ -1,8 +1,7 @@
 # Firebird TPROC-H (TPC-H-like OLAP) implementation.
 #
-# Build status: skeleton. Real schema build, the 22 TPC-H queries
-# adapted for Firebird SQL dialect, and the refresh streams (RF1/RF2)
-# land in subsequent commits (THE_PLAN tasks C9-C11).
+# Provides the TPC-H schema build, the 22 TPC-H queries adapted for
+# Firebird SQL dialect, and the refresh streams (RF1/RF2).
 #
 # Connection plumbing reuses fb_build_connstr / ConnectToFirebird from
 # fboltp.tcl, which is sourced before this file by hammerdbcli.
@@ -420,8 +419,9 @@ proc fb_load_tpch { conn scale_factor } {
 #
 # Per TPC-H 5.3.4 a power test runs RF1 → all 22 queries in their
 # ordered sequence → RF2, then reports the geometric mean of query
-# times. Multi-VU "throughput" tests are out of scope for the initial
-# Firebird integration (see THE_PLAN.md).
+# times. Multi-VU "throughput" tests are implemented separately in
+# `fb_tpch_query_stream` / `fb_tpch_refresh_loop` for server-mode
+# execution (see `.github/workflows/scripts/fb_tpch_throughput.tcl`).
 # ---------------------------------------------------------------------
 
 proc fb_tpch_rf1 { conn scale_factor upd_num } {
@@ -859,7 +859,7 @@ proc build_fbtpch {} {
     upvar #0 dbdict dbdict
     upvar #0 configfirebird configfirebird
     setlocalfbtpchvars $configfirebird
-    error "build_fbtpch: GUI build flow not yet wired up; DDL is in fb_create_tpch_schema, queries in fb_tpch_queries. Bulk loader (C10) tracked in THE_PLAN.md."
+    error "build_fbtpch: GUI build flow not yet wired up; DDL is in fb_create_tpch_schema, the 22 queries in fb_tpch_queries, and the bulk loader in fb_load_tpch."
 }
 
 # ---------------------------------------------------------------------

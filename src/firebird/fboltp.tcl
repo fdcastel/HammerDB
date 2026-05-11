@@ -7,11 +7,9 @@
 #   User=SYSDBA;
 # (Embedded mode: no host/port, no password required.)
 #
-# Build status: skeleton. Connection helper and config plumbing are
-# wired up so that scripts/tcl/firebird/tprocc/* can stand up. Schema
+# Wires up `scripts/tcl/firebird/tprocc/*`: connection helper, schema
 # DDL, stored procedures, driver procs (neword/payment/delivery/ostat/
-# slev), bulk-load batching and update-conflict retry land in
-# subsequent commits (THE_PLAN tasks C3-C8).
+# slev), bulk-load batching, and update-conflict retry.
 
 proc fb_library_version {} {
     upvar #0 dbdict dbdict
@@ -718,7 +716,7 @@ proc build_fbtpcc {} {
     upvar #0 dbdict dbdict
     upvar #0 configfirebird configfirebird
     setlocalfbtpccvars $configfirebird
-    error "build_fbtpcc: GUI build flow not yet wired up; the DDL is implemented in fb_create_tpcc_schema. Tracking row loaders in THE_PLAN.md task C4-C5"
+    error "build_fbtpcc: GUI build flow not yet wired up; the DDL is implemented in fb_create_tpcc_schema and the bulk loaders are exercised by the CI workflow scripts."
 }
 
 # ---------------------------------------------------------------------
