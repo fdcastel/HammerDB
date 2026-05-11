@@ -3,7 +3,7 @@
 # Embedded-mode ODBC connection string (canonical):
 #   Driver={Firebird ODBC Driver};
 #   Dbname=<absolute path to .fdb, forward slashes>;
-#   Client=fbclient.dll;
+#   Client=fbclient.dll;        (Windows; libfbclient.so.5 on Linux)
 #   User=SYSDBA;
 # (Embedded mode: no host/port, no password required.)
 #
@@ -29,6 +29,23 @@ proc fb_library_version {} {
     return [list $library $version]
 }
 
+proc fb_default_client_lib {} {
+    # Pick the Firebird client library file name that the ODBC driver
+    # should dlopen. The Firebird ODBC driver's Client= attribute is
+    # passed straight to the platform loader (LoadLibrary on Windows,
+    # dlopen on POSIX), so the file extension matters: a Linux build
+    # given "fbclient.dll" will fail with "cannot open shared object".
+    # FB_CLIENT_LIB env var overrides for non-default installs (e.g.
+    # vendored fbclient next to the binary).
+    if {[info exists ::env(FB_CLIENT_LIB)] && $::env(FB_CLIENT_LIB) ne ""} {
+        return $::env(FB_CLIENT_LIB)
+    }
+    if {$::tcl_platform(platform) eq "windows"} {
+        return "fbclient.dll"
+    }
+    return "libfbclient.so.2"
+}
+
 proc fb_build_connstr { fb_odbc_driver fb_embedded fb_host fb_port fb_dbase fb_user fb_pass fb_charset } {
     # Builds the ODBC connection string for either embedded or remote
     # Firebird. Caller passes resolved scalars (no upvar) so this proc
@@ -39,7 +56,8 @@ proc fb_build_connstr { fb_odbc_driver fb_embedded fb_host fb_port fb_dbase fb_u
         # Convert backslashes to forward slashes so the ODBC parser
         # doesn't choke on Windows-style paths inside the Dbname token.
         set dbpath [string map {\\ /} $fb_dbase]
-        append connstr "Dbname=$dbpath;Client=fbclient.dll;User=$fb_user;"
+        set client [fb_default_client_lib]
+        append connstr "Dbname=$dbpath;Client=$client;User=$fb_user;"
     } else {
         # Server mode (future): host:port path.
         append connstr "Dbname=$fb_host/$fb_port:$fb_dbase;User=$fb_user;Password=$fb_pass;"

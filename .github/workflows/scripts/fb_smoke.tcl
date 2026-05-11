@@ -15,7 +15,16 @@ if {$driver eq "" || $dbpath eq ""} {
     exit 2
 }
 
-set connStr "Driver={$driver};Dbname=$dbpath;Client=fbclient.dll;User=SYSDBA;"
+# The Client= attribute is dlopen'd by the Firebird ODBC driver, so
+# the file extension is platform-specific.
+if {[info exists ::env(FB_CLIENT_LIB)] && $::env(FB_CLIENT_LIB) ne ""} {
+    set client $::env(FB_CLIENT_LIB)
+} elseif {$::tcl_platform(platform) eq "windows"} {
+    set client "fbclient.dll"
+} else {
+    set client "libfbclient.so.2"
+}
+set connStr "Driver={$driver};Dbname=$dbpath;Client=$client;User=SYSDBA;"
 puts "connection string: $connStr"
 
 set conn [tdbc::odbc::connection new $connStr]

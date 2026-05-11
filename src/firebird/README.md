@@ -64,8 +64,15 @@ and our Linux Dockerfile entry in `/etc/odbcinst.ini`). The connection
 string template, baked into `fb_build_connstr`:
 
 ```
-Driver={Firebird ODBC Driver};Dbname=<absolute-path>;Client=fbclient.dll;User=SYSDBA;
+Driver={Firebird ODBC Driver};Dbname=<absolute-path>;Client=<fbclient-lib>;User=SYSDBA;
 ```
+
+`Client=` is dlopen'd by the ODBC driver, so the file name is
+platform-specific. `fb_default_client_lib` in `fboltp.tcl` picks
+`fbclient.dll` on Windows and `libfbclient.so.2` elsewhere (matches
+the Firebird 3 client package the Docker image installs). Set the
+`FB_CLIENT_LIB` env var to override — e.g. `libfbclient.so.5` if
+linking against a Firebird 5 client on Linux.
 
 `fb_build_connstr` also emits the server-mode form
 `Dbname=<host>/<port>:<path>;User=SYSDBA;Password=<pw>;` when
