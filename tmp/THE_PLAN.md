@@ -120,7 +120,8 @@ For both TPROC-C and TPROC-H, mirror the 10-file PostgreSQL set: `*_buildschema.
 
 | # | Status | Commit | Task | Notes / Files |
 |---|---|---|---|---|
-| H1 | ❌ OPEN |  | Update https://www.hammerdb.com/docs/ chapter mentioning supported databases | Coordinate with maintainers via PR — docs live outside this repo. |
-| H2 | ❌ OPEN |  | Open follow-up issue for `fbmet.tcl` (Active Session History via `MON$` tables) | Explicitly out of scope for this initial integration. Link to [src/postgresql/pgmet.tcl](src/postgresql/pgmet.tcl) and [src/mysql/mysqlmet.tcl](src/mysql/mysqlmet.tcl) as references. |
-| H3 | ⏯️ DEFERRED |  | Native `tdbc::firebird` driver evaluation | Blocked by: ODBC route validated in Phases C–G first. Revisit only if ODBC overhead becomes the benchmark bottleneck. |
-| H4 | ❌ OPEN |  | Announce on the HammerDB GitHub Discussion #57 (Firebird request thread) | After Phase G passes. |
+| H1 | ⏯️ DEFERRED |  | Update https://www.hammerdb.com/docs/ chapter | Lives outside the repo. Track separately with maintainers once the upstream PR lands. |
+| H2 | ⏯️ DEFERRED |  | Open follow-up issue for `fbmet.tcl` (Active Session History via `MON$` tables) | Documented in `src/firebird/README.md` "Deferred items"; convert to a GitHub issue when opening the upstream PR. |
+| H3 | ⏯️ DEFERRED |  | Native `tdbc::firebird` driver evaluation | Documented in `src/firebird/README.md`. Revisit only if ODBC overhead becomes the benchmark bottleneck. |
+| H4 | ⏯️ DEFERRED |  | Announce on the HammerDB GitHub Discussion #57 (Firebird request thread) | Hold until Phase G unblocks (needs an upstream Bawt rebuild that includes our additions). |
+| H5 | ✅ DONE | (this commit) | Add `src/firebird/README.md` | Architecture overview: status table, embedded-by-default rationale, tdbc::odbc + ODBC driver wiring, dual `:NAME` parameter convention (DSQL vs PSQL), `S_DIST_NN` CASE trick, file layout, deferred-items summary, local-test recipe. |
