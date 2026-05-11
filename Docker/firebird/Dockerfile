@@ -62,5 +62,5 @@ RUN set -eux; \
 # `Driver={Firebird ODBC Driver};Dbname=<path>;Client=libfbclient.so;User=SYSDBA;`
 # is built by src/firebird/fboltp.tcl::fb_build_connstr.
 
-USER hammerdb
-WORKDIR /home/hammerdb
+# Base image already sets USER and WORKDIR; do not override here
+# (matches Docker/{mysql,postgres,maria,mssqls}/Dockerfile).
