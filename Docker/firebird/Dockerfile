@@ -31,10 +31,11 @@ RUN apt-get update && \
         ca-certificates \
         firebird3.0-server-core \
         firebird3.0-utils \
+        gcc \
         libfbclient2 \
         tcl \
         tcl8.6-tdbc-odbc \
-        unixodbc \
+        unixodbc unixodbc-dev \
         unzip \
         wget && \
     rm -rf /var/lib/apt/lists/* && \

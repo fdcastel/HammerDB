@@ -65,6 +65,15 @@ jobs:
               rm -f /tmp/smoke.fdb
               echo "CREATE DATABASE '"'"'/tmp/smoke.fdb'"'"' USER '"'"'SYSDBA'"'"' PASSWORD '"'"'masterkey'"'"'; QUIT;" | isql-fb -q
               ls -la /tmp/smoke.fdb
+
+              # First probe: raw unixODBC SQLDriverConnect via a tiny C
+              # program. Walks all diag records and hex-dumps the
+              # message, so we see the exact bytes the driver returned
+              # (tdbc::odbc wraps the diagnostic record and has been
+              # obscuring this).
+              gcc -O0 -g -o /tmp/fb_odbc_probe .github/workflows/scripts/fb_odbc_probe.c -lodbc
+              /tmp/fb_odbc_probe "Driver={Firebird ODBC Driver};Dbname=/tmp/smoke.fdb;Client=libfbclient.so.2;UID=SYSDBA;PWD=masterkey;" || true
+
               FB_DB_PATH=/tmp/smoke.fdb \
                 tclsh .github/workflows/scripts/fb_smoke.tcl
 
