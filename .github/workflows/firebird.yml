@@ -210,7 +210,9 @@ jobs:
           # FB_LOADED_DB is in forward-slash form for tdbc; isql wants the platform path.
           $fbDbForIsql = $env:FB_LOADED_DB.Replace('/', '\')
           Write-Host "Installing PAYMENT_SP into $fbDbForIsql"
-          $out = Invoke-FirebirdIsql -Database $fbDbForIsql -Sql $sql -Verbose
+          # Pass SYSDBA credentials via isql args (the .fdb was created
+          # by New-FirebirdDatabase with default SYSDBA/masterkey).
+          $out = Invoke-FirebirdIsql -Database $fbDbForIsql -Sql $sql -- -u SYSDBA -p masterkey
           Write-Host $out
 
       - name: Smoke PSQL stored procedure (PAYMENT_SP via tdbc::odbc)
