@@ -89,9 +89,9 @@ For both TPROC-C and TPROC-H, mirror the 10-file PostgreSQL set: `*_buildschema.
 
 | # | Status | Commit | Task | Notes / Files |
 |---|---|---|---|---|
-| E1 | ❌ OPEN |  | `scripts/python/firebird/tprocc/` — `.py` files mirroring D1 | Template: [scripts/python/postgres/tprocc/](scripts/python/postgres/tprocc/). 7 `.py` + 3 shell wrappers (`*_py.sh`, `*_py.ps1`, `*_single_py.sh`, `*_profile_py.sh`). |
-| E2 | ❌ OPEN |  | `scripts/python/firebird/tproch/` — equivalent set | Template: [scripts/python/postgres/tproch/](scripts/python/postgres/tproch/). |
-| E3 | ❌ OPEN |  | Add a workflow job that runs the Python entrypoints against an embedded `.fdb` on the CI runner | HammerDB embeds Tcl-via-Python; ensure the Python entrypoint environment sees `fbclient.dll` (PATH from A2) and the registered ODBC driver (A3). Job runs after E1–E2 land and gates merging. |
+| E1 | 🔧 IN PROGRESS |  | `scripts/python/firebird/tprocc/` — `.py` files mirroring D1 | Committed: `fb_tprocc_buildschema.py`, `fb_tprocc_checkschema.py`, `fb_tprocc_deleteschema.py`, `fb_tprocc_run.py`, `fb_tprocc_result.py`, `fb_tprocc_py.sh`, `fb_tprocc_py.ps1`. Profile/single wrappers deferred. |
+| E2 | 🔧 IN PROGRESS |  | `scripts/python/firebird/tproch/` — equivalent set | Committed: matching set under tproch. |
+| E3 | ⏯️ DEFERRED |  | Add a workflow job that runs the Python entrypoints against an embedded `.fdb` on the CI runner | Same constraint as D3: requires `hammerdbcli py auto` runtime. Wired up alongside D3 in Phase G. |
 
 ## Phase F — CI pipeline + Docker
 
