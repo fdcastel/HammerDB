@@ -206,11 +206,24 @@ proc fb_create_tpcc_schema { conn } {
 # TPROC-C bulk loader.
 #
 # Firebird has no COPY/BCP equivalent, so we use prepared INSERT
-# statements with positional `?` placeholders and commit in batches
-# (default 1000 rows). The generated row data follows the same TPC-C
-# spec the postgres/mssqls drivers use; helper procs come from the
-# tpcccommon module.
+# statements with `:name` parameter placeholders (tdbc::odbc rejects
+# positional `?`) and commit in batches (default 1000 rows). The
+# generated row data follows the same TPC-C spec the postgres/mssqls
+# drivers use; helper procs come from the tpcccommon module.
+#
+# IMPORTANT: tdbc's $stmt execute returns a resultset object that
+# holds the underlying ODBC cursor. For Firebird, calling execute
+# again before that resultset is closed yields "Too many concurrent
+# executions of the same request". The fb_exec helper closes the
+# resultset immediately so the statement can be reused in a tight
+# insert loop.
 # ---------------------------------------------------------------------
+
+proc fb_exec { stmt params } {
+    set rs [$stmt execute $params]
+    $rs close
+    return
+}
 
 namespace eval ::fb_loader {
     variable BATCH_SIZE 1000
@@ -261,7 +274,7 @@ proc fb_load_item { conn MAXITEMS } {
             set last [expr {$first + 8}]
             set i_data [string replace $i_data $first $last "original"]
         }
-        $stmt execute [dict create i_id $i_id i_im_id $i_im_id \
+        fb_exec $stmt [dict create i_id $i_id i_im_id $i_im_id \
             i_name $i_name i_price $i_price i_data $i_data]
         incr inBatch
         if {$inBatch >= $::fb_loader::BATCH_SIZE} {
@@ -306,7 +319,7 @@ proc fb_load_districts { conn w_id DIST_PER_WARE CUST_PER_DIST } {
     for {set d_id 1} {$d_id <= $DIST_PER_WARE} {incr d_id} {
         set name [MakeAlphaString 6 10 $chArr $chLen]
         set addr [MakeAddress $chArr $chLen]
-        $stmt execute [dict create d_id $d_id d_w_id $w_id d_name $name \
+        fb_exec $stmt [dict create d_id $d_id d_w_id $w_id d_name $name \
             d_street_1 [lindex $addr 0] d_street_2 [lindex $addr 1] \
             d_city [lindex $addr 2] d_state [lindex $addr 3] \
             d_zip [lindex $addr 4] \
@@ -358,7 +371,7 @@ proc fb_load_customer_history { conn w_id DIST_PER_WARE CUST_PER_DIST } {
             set discount [format "%4.4f" [expr {[RandomNumber 0 5000]/10000.0}]]
             set c_data [MakeAlphaString 300 500 $chArr $chLen]
             set ts [fb_iso_ts]
-            $stmtCust execute [dict create c_id $c_id c_d_id $d_id c_w_id $w_id \
+            fb_exec $stmtCust [dict create c_id $c_id c_d_id $d_id c_w_id $w_id \
                 c_first $c_first c_middle OE c_last $c_last \
                 c_street_1 [lindex $addr 0] c_street_2 [lindex $addr 1] \
                 c_city [lindex $addr 2] c_state [lindex $addr 3] \
@@ -367,7 +380,7 @@ proc fb_load_customer_history { conn w_id DIST_PER_WARE CUST_PER_DIST } {
                 c_balance -10.00 c_data $c_data c_ytd_payment 10.00 \
                 c_payment_cnt 1 c_delivery_cnt 0]
             set h_data [MakeAlphaString 12 24 $chArr $chLen]
-            $stmtHist execute [dict create h_c_id $c_id h_c_d_id $d_id \
+            fb_exec $stmtHist [dict create h_c_id $c_id h_c_d_id $d_id \
                 h_c_w_id $w_id h_w_id $w_id h_d_id $d_id h_date $ts \
                 h_amount 10.00 h_data $h_data]
             incr inBatch
@@ -416,7 +429,7 @@ proc fb_load_stock { conn w_id MAXITEMS } {
             set last [expr {$first + 8}]
             set s_data [string replace $s_data $first $last "original"]
         }
-        $stmt execute [dict create s_i_id $s_i_id s_w_id $w_id s_quantity $qty \
+        fb_exec $stmt [dict create s_i_id $s_i_id s_w_id $w_id s_quantity $qty \
             s_dist_01 [lindex $dists 0] s_dist_02 [lindex $dists 1] \
             s_dist_03 [lindex $dists 2] s_dist_04 [lindex $dists 3] \
             s_dist_05 [lindex $dists 4] s_dist_06 [lindex $dists 5] \
@@ -482,12 +495,12 @@ proc fb_load_orders { conn w_id DIST_PER_WARE ORD_PER_DIST MAXITEMS } {
             if {$o_id > 2100} {
                 # First 900 orders per district are unfulfilled
                 # NEW_ORDERs - O_CARRIER_ID stays NULL (key absent).
-                $stmtOrders execute $ord
-                $stmtNewOrder execute [dict create no_o_id $o_id \
+                fb_exec $stmtOrders $ord
+                fb_exec $stmtNewOrder [dict create no_o_id $o_id \
                                                    no_d_id $d_id no_w_id $w_id]
             } else {
                 dict set ord o_carrier_id [RandomNumber 1 10]
-                $stmtOrders execute $ord
+                fb_exec $stmtOrders $ord
             }
             for {set ol 1} {$ol <= $o_ol_cnt} {incr ol} {
                 set ol_i_id [RandomNumber 1 $MAXITEMS]
@@ -505,7 +518,7 @@ proc fb_load_orders { conn w_id DIST_PER_WARE ORD_PER_DIST MAXITEMS } {
                         [expr {[RandomNumber 10 10000]/100.0}]]
                     dict set olRow ol_delivery_d $ts
                 }
-                $stmtOrderLine execute $olRow
+                fb_exec $stmtOrderLine $olRow
             }
             incr total
             incr inBatch
