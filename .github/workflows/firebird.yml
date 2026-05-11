@@ -329,6 +329,15 @@ jobs:
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_tpch_load.tcl"
           if ($LASTEXITCODE -ne 0) { throw "throughput load failed with exit $LASTEXITCODE" }
 
+          # The PSFirebird-downloaded security database ships empty;
+          # TCP connections need SYSDBA initialised. Embedded mode
+          # bypasses auth so we can CREATE USER through isql against
+          # the loaded .fdb (the user is stored in the env's security
+          # database, not the .fdb).
+          Write-Host "Initialising SYSDBA in the security database..."
+          "CREATE USER SYSDBA PASSWORD 'masterkey';" |
+              Invoke-FirebirdIsql -Database $fbDb 2>&1 | Out-Host
+
           Write-Host "Starting Firebird server on port 3050..."
           $instance = Start-FirebirdInstance -Port 3050
           # Give the server a moment to bind the port. PSFirebird's
