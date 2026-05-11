@@ -39,8 +39,18 @@ jobs:
             ls -la /usr/lib/x86_64-linux-gnu/libfbclient*
             ls -la /usr/lib/x86_64-linux-gnu/libOdbcFb.so
             grep -A1 "Firebird ODBC Driver" /etc/odbcinst.ini
-            isql -h || true
+            isql-fb -z -q </dev/null || true
+            tclsh <<<"package require tdbc::odbc; puts \"tdbc::odbc OK [package require tdbc::odbc]\""
           '
+
+      # End-to-end SQL on Linux is intentionally NOT exercised. The
+      # upstream Firebird ODBC driver (tested v3-0-1-release and
+      # v3.5.0-rc1) returns garbage native error codes and SQLSTATE
+      # 00000 on every connection attempt from tdbc::odbc - even when
+      # libfbclient + isql open the same .fdb without issue. The
+      # error reporting is so broken we can't even tell whether the
+      # connection succeeded. The Windows job covers the full SQL
+      # path. See src/firebird/README.md for context.
 
   windows-smoke:
     name: Windows / Firebird Embedded smoke

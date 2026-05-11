@@ -74,6 +74,15 @@ the Firebird 3 client package the Docker image installs). Set the
 `FB_CLIENT_LIB` env var to override — e.g. `libfbclient.so.5` if
 linking against a Firebird 5 client on Linux.
 
+> **Linux SQL coverage caveat.** The CI matrix exercises the full
+> SQL/PSQL paths only on Windows. The official Firebird ODBC driver
+> (libOdbcFb.so, both v3-0-1-release and v3.5.0-rc1) returns garbage
+> native error codes and empty SQLSTATEs on any `SQLDriverConnect`
+> from `tdbc::odbc`, regardless of embedded vs server mode, even
+> when `isql` against the same `.fdb` succeeds. Linux CI verifies
+> the image builds and the binaries load (`Docker/firebird/`), but
+> does not exercise SQL round-trips through the driver.
+
 `fb_build_connstr` also emits the server-mode form
 `Dbname=<host>/<port>:<path>;User=SYSDBA;Password=<pw>;` when
 `fb_embedded=false`.
