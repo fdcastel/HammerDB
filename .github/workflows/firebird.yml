@@ -58,40 +58,7 @@ jobs:
             -e HAMMERDB_ROOT=/work \
             -e FB_ODBC_DRIVER="Firebird ODBC Driver" \
             -e FB_PASSWORD=masterkey \
-            hammerdb-firebird:ci bash -lc '
-              set -eux
-
-              # Diagnostic: run the tcl smoke FIRST on its own .fdb so
-              # there's no chance the C probe is leaving Engine12 state
-              # behind that affects the second open.
-              rm -f /tmp/tcl_first.fdb
-              echo "CREATE DATABASE '"'"'/tmp/tcl_first.fdb'"'"' USER '"'"'SYSDBA'"'"' PASSWORD '"'"'masterkey'"'"'; QUIT;" | isql-fb -q
-              echo "--- tcl-only on a fresh .fdb (no prior probe) ---"
-              FB_DB_PATH=/tmp/tcl_first.fdb \
-                tclsh .github/workflows/scripts/fb_smoke.tcl || true
-
-              # 1. Smoke: create a fresh .fdb and probe SELECT 1
-              rm -f /tmp/smoke.fdb
-              echo "CREATE DATABASE '"'"'/tmp/smoke.fdb'"'"' USER '"'"'SYSDBA'"'"' PASSWORD '"'"'masterkey'"'"'; QUIT;" | isql-fb -q
-              ls -la /tmp/smoke.fdb
-
-              # C probe to confirm the driver works through bare unixODBC
-              gcc -O0 -g -o /tmp/fb_odbc_probe .github/workflows/scripts/fb_odbc_probe.c -lodbc
-              echo "--- C probe ---"
-              /tmp/fb_odbc_probe "Driver={Firebird ODBC Driver};Dbname=/tmp/smoke.fdb;Client=libfbclient.so.2;UID=SYSDBA;PWD=masterkey;" || true
-
-              echo "--- tcl smoke (real, against a fresh .fdb after probe) ---"
-              rm -f /tmp/smoke2.fdb
-              echo "CREATE DATABASE '"'"'/tmp/smoke2.fdb'"'"' USER '"'"'SYSDBA'"'"' PASSWORD '"'"'masterkey'"'"'; QUIT;" | isql-fb -q
-              FB_DB_PATH=/tmp/smoke2.fdb \
-                tclsh .github/workflows/scripts/fb_smoke.tcl
-
-              # 2. Schema: build the full 9-table TPC-C schema
-              rm -f /tmp/schema.fdb
-              echo "CREATE DATABASE '"'"'/tmp/schema.fdb'"'"' USER '"'"'SYSDBA'"'"' PASSWORD '"'"'masterkey'"'"'; QUIT;" | isql-fb -q
-              FB_DB_PATH=/tmp/schema.fdb \
-                tclsh .github/workflows/scripts/fb_schema.tcl
-            '
+            hammerdb-firebird:ci bash /work/.github/workflows/scripts/fb_linux_smoke.sh
 
   windows-smoke:
     name: Windows / Firebird Embedded smoke
