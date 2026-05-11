@@ -24,38 +24,17 @@ if {[info exists ::env(FB_CLIENT_LIB)] && $::env(FB_CLIENT_LIB) ne ""} {
 } else {
     set client "libfbclient.so.2"
 }
-set connStr "Driver={$driver};Dbname=$dbpath;Client=$client;UID=SYSDBA;"
-# Optional explicit password. Embedded mode on Linux with FB3 Legacy_Auth
-# still authenticates against security.fdb / Legacy_UserManager and the
-# default SYSDBA/masterkey lives there; on Windows, Trusted_Auth makes
-# the password unnecessary, so FB_PASSWORD stays unset there.
+set connStr "Driver={$driver};Dbname=$dbpath;Client=$client;User=SYSDBA;"
+# Optional explicit password. Embedded mode on Linux still
+# authenticates SYSDBA via Legacy_UserManager / Srp, so the password
+# must travel in the connection string; on Windows, Trusted_Auth
+# supplies the credential and a non-empty FB_PASSWORD is harmless.
 if {[info exists ::env(FB_PASSWORD)] && $::env(FB_PASSWORD) ne ""} {
-    append connStr "PWD=$::env(FB_PASSWORD);"
+    append connStr "Password=$::env(FB_PASSWORD);"
 }
 puts "connection string: $connStr"
 
-# Trap the connection error so we can inspect exactly what the driver
-# returned to tdbc::odbc - on Linux the upstream Firebird ODBC driver
-# (both v3-0-1-release and v3.5.0-rc1) has historically returned an
-# empty SQLSTATE + non-deterministic native code + a single-byte
-# message; we want to see whether the v3.5.1-rc1 patched build
-# changes that.
-if {[catch {tdbc::odbc::connection new $connStr} conn errdict]} {
-    puts stderr "tdbc::odbc::connection failed:"
-    puts stderr "  -message: <<<$conn>>> (strlen=[string length $conn])"
-    foreach k [list -errorcode -errorinfo] {
-        if {[dict exists $errdict $k]} {
-            set v [dict get $errdict $k]
-            puts stderr "  $k: <<<$v>>>"
-        }
-    }
-    # Hex dump the first 64 bytes of the message - reveals embedded
-    # nulls, control characters, anything strcpy would have truncated.
-    binary scan $conn H* hex
-    set hex [string range $hex 0 127]
-    puts stderr "  -message hex (first 64B): $hex"
-    exit 3
-}
+set conn [tdbc::odbc::connection new $connStr]
 # Firebird upper-cases unquoted identifiers, so tdbc returns dict
 # keys like ONE, not one. Read the first column by position to stay
 # dialect-neutral.
