@@ -215,82 +215,9 @@ jobs:
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_tpch_schema.tcl"
           if ($LASTEXITCODE -ne 0) { throw "TPC-H schema build failed with exit $LASTEXITCODE" }
 
-      - name: Phase G - download HammerDB 5.0 release + overlay firebird files
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $hdbRoot = Join-Path $env:RUNNER_TEMP 'hammerdb'
-          if (Test-Path $hdbRoot) { Remove-Item $hdbRoot -Recurse -Force }
-          New-Item -ItemType Directory -Path $hdbRoot | Out-Null
-          $tarball = Join-Path $env:RUNNER_TEMP 'HammerDB-5.0-Prod-Win.tar.gz'
-          $url = 'https://github.com/TPC-Council/HammerDB/releases/download/v5.0/HammerDB-5.0-Prod-Win.tar.gz'
-          Write-Host "Downloading $url"
-          Invoke-WebRequest -Uri $url -OutFile $tarball -UseBasicParsing
-          Write-Host ("Tarball size: {0:N0} bytes" -f (Get-Item $tarball).Length)
-          Write-Host "Extracting $tarball -> $hdbRoot"
-          tar -xzf $tarball -C $hdbRoot 2>&1 | Out-Host
-          Write-Host "tar exit code: $LASTEXITCODE"
-          Write-Host "Contents of $($hdbRoot):"
-          Get-ChildItem $hdbRoot -Force | Format-Table Mode, Length, Name | Out-Host
-          # Find the HammerDB root: either flat under $hdbRoot or one nested level.
-          if (Test-Path (Join-Path $hdbRoot 'hammerdbcli.bat')) {
-              $hdbBin = $hdbRoot
-          } elseif (Test-Path (Join-Path $hdbRoot 'hammerdbcli')) {
-              $hdbBin = $hdbRoot
-          } else {
-              $sub = Get-ChildItem $hdbRoot -Directory | Select-Object -First 1
-              if ($null -eq $sub) { throw "HammerDB extract is empty" }
-              Write-Host "Looking for hammerdbcli in $($sub.FullName)"
-              Get-ChildItem $sub.FullName -Force | Format-Table Mode, Length, Name | Out-Host
-              $hdbBin = $sub.FullName
-          }
-          Write-Host "HammerDB binary root: $hdbBin"
-          Write-Host "Recursive listing (depth 2):"
-          Get-ChildItem $hdbBin -Recurse -Depth 1 -Force | Select-Object FullName | Out-Host
-          if (-not (Test-Path "$hdbBin\src")) { throw "expected src/ dir not found at $hdbBin" }
-          if (-not (Test-Path "$hdbBin\config")) { throw "expected config/ dir not found at $hdbBin" }
-          if (-not (Test-Path "$hdbBin\scripts\tcl")) { throw "expected scripts/tcl/ dir not found at $hdbBin" }
-          if (-not (Test-Path "$hdbBin\scripts\python")) { throw "expected scripts/python/ dir not found at $hdbBin" }
-          # Make $inner.FullName style work for the rest of the script
-          $inner = [PSCustomObject]@{ FullName = $hdbBin }
-          # Overlay: copy each new firebird directory/file explicitly.
-          Write-Host "Copying src/firebird"
-          Copy-Item -Path "${{ github.workspace }}\src\firebird" -Destination "$($inner.FullName)\src\firebird" -Recurse -Force
-          Write-Host "Copying config/firebird.xml + database.xml"
-          Copy-Item -Path "${{ github.workspace }}\config\firebird.xml" -Destination "$($inner.FullName)\config\firebird.xml" -Force
-          Copy-Item -Path "${{ github.workspace }}\config\database.xml" -Destination "$($inner.FullName)\config\database.xml" -Force
-          Write-Host "Copying scripts/tcl/firebird"
-          Copy-Item -Path "${{ github.workspace }}\scripts\tcl\firebird" -Destination "$($inner.FullName)\scripts\tcl\firebird" -Recurse -Force
-          Write-Host "Copying scripts/python/firebird"
-          Copy-Item -Path "${{ github.workspace }}\scripts\python\firebird" -Destination "$($inner.FullName)\scripts\python\firebird" -Recurse -Force
-          # HammerDB caches database.xml into a SQLite file on first run;
-          # delete it so our updated database.xml is re-parsed.
-          Get-ChildItem "$($inner.FullName)" -Filter 'database.db' -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force
-          # fbclient.dll on PATH already. Persist HammerDB root for the next step.
-          "HAMMERDB_BIN_ROOT=$($inner.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "Verify firebird overlay:"
-          Get-ChildItem "$($inner.FullName)\src\firebird"
-          Get-ChildItem "$($inner.FullName)\config\firebird.xml"
-
-      - name: Phase G - run hammerdbcli buildschema against firebird
-        shell: pwsh
-        env:
-          FB_ODBC_DRIVER: ${{ env.FIREBIRD_ODBC_DRIVER }}
-        run: |
-          $fbDb = Join-Path $env:RUNNER_TEMP 'firebird\hammerdbcli_tpcc.fdb'
-          if (Test-Path $fbDb) { Remove-Item $fbDb -Force }
-          Import-Module PSFirebird
-          New-FirebirdDatabase -Database $fbDb -Force
-          $env:FB_DBASE = ($fbDb -replace '\\', '/')
-          # Copy the CI script into the HammerDB tree so paths line up.
-          Copy-Item -Path "${{ github.workspace }}\.github\workflows\scripts\fb_hammerdbcli_ci.tcl" -Destination "$env:HAMMERDB_BIN_ROOT\fb_hammerdbcli_ci.tcl" -Force
-          Push-Location $env:HAMMERDB_BIN_ROOT
-          try {
-            Write-Host "--- HammerDB binary launch ---"
-            Get-ChildItem .\bin -Filter 'tclsh*' | Select-Object Name, Length
-            # hammerdbcli .bat is the Windows launcher
-            $cli = if (Test-Path '.\hammerdbcli.bat') { '.\hammerdbcli.bat' } else { '.\hammerdbcli' }
-            Write-Host "Running: $cli auto fb_hammerdbcli_ci.tcl"
-            & $cli auto fb_hammerdbcli_ci.tcl
-            if ($LASTEXITCODE -ne 0) { throw "hammerdbcli buildschema failed with exit $LASTEXITCODE" }
-          } finally { Pop-Location }
+      # Phase G (run hammerdbcli end-to-end) is deferred. The HammerDB
+      # Windows release ships as a self-contained .exe with the entire
+      # source/lib tree bundled via zipfs - the binary can't be patched
+      # to use our updated src/firebird/ and config/database.xml without
+      # rebuilding the .exe via the Bawt build system. Tracking under
+      # THE_PLAN.md G2/G4.
