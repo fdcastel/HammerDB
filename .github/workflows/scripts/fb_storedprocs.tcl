@@ -49,10 +49,14 @@ if {!$found} {
 puts "OK: PAYMENT_SP visible in RDB\$PROCEDURES"
 
 # Invoke PAYMENT_SP for warehouse 1 / district 1 / customer 1.
+# PAYMENT_SP uses SUSPEND so it is a "selectable procedure" - call it
+# via SELECT FROM rather than EXECUTE PROCEDURE so tdbc::odbc accepts
+# the statement.
 $conn begintransaction
 set ts [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"]
 set rs [$conn prepare {
-    EXECUTE PROCEDURE PAYMENT_SP (:w_id, :d_id, :cw_id, :cd_id, :c_id, :amt, :ts)
+    SELECT OUT_C_BALANCE, OUT_C_CREDIT, OUT_W_NAME, OUT_D_NAME
+    FROM PAYMENT_SP(:w_id, :d_id, :cw_id, :cd_id, :c_id, :amt, :ts)
 }]
 set out [$rs execute [dict create w_id 1 d_id 1 cw_id 1 cd_id 1 c_id 1 amt 12.34 ts $ts]]
 set rows [list]
