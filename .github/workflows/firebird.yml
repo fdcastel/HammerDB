@@ -214,3 +214,55 @@ jobs:
           $env:FB_DB_PATH = ($fbDb -replace '\\', '/')
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_tpch_schema.tcl"
           if ($LASTEXITCODE -ne 0) { throw "TPC-H schema build failed with exit $LASTEXITCODE" }
+
+      - name: Phase G - download HammerDB 5.0 release + overlay firebird files
+        shell: pwsh
+        run: |
+          $hdbRoot = Join-Path $env:RUNNER_TEMP 'hammerdb'
+          if (Test-Path $hdbRoot) { Remove-Item $hdbRoot -Recurse -Force }
+          New-Item -ItemType Directory -Path $hdbRoot | Out-Null
+          $tarball = Join-Path $env:RUNNER_TEMP 'HammerDB-5.0-Prod-Win.tar.gz'
+          $url = 'https://github.com/TPC-Council/HammerDB/releases/download/v5.0/HammerDB-5.0-Prod-Win.tar.gz'
+          Write-Host "Downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile $tarball -UseBasicParsing
+          Write-Host "Extracting $tarball -> $hdbRoot"
+          tar -xzf $tarball -C $hdbRoot
+          # Tarball extracts a single top-level dir like HammerDB-5.0
+          $inner = Get-ChildItem $hdbRoot -Directory | Select-Object -First 1
+          Write-Host "HammerDB extracted to: $($inner.FullName)"
+          # Overlay our checkout's firebird-relevant files
+          Copy-Item -Path "${{ github.workspace }}\src\firebird" -Destination "$($inner.FullName)\src\" -Recurse -Force
+          Copy-Item -Path "${{ github.workspace }}\config\firebird.xml" -Destination "$($inner.FullName)\config\" -Force
+          Copy-Item -Path "${{ github.workspace }}\config\database.xml" -Destination "$($inner.FullName)\config\" -Force
+          Copy-Item -Path "${{ github.workspace }}\scripts\tcl\firebird" -Destination "$($inner.FullName)\scripts\tcl\" -Recurse -Force
+          Copy-Item -Path "${{ github.workspace }}\scripts\python\firebird" -Destination "$($inner.FullName)\scripts\python\" -Recurse -Force
+          # HammerDB caches database.xml into a SQLite file on first run;
+          # delete it so our updated database.xml is re-parsed.
+          Get-ChildItem "$($inner.FullName)" -Filter 'database.db' -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force
+          # fbclient.dll on PATH already. Persist HammerDB root for the next step.
+          "HAMMERDB_BIN_ROOT=$($inner.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Get-ChildItem "$($inner.FullName)\src\firebird"
+          Get-ChildItem "$($inner.FullName)\config\firebird.xml"
+
+      - name: Phase G - run hammerdbcli buildschema against firebird
+        shell: pwsh
+        env:
+          FB_ODBC_DRIVER: ${{ env.FIREBIRD_ODBC_DRIVER }}
+        run: |
+          $fbDb = Join-Path $env:RUNNER_TEMP 'firebird\hammerdbcli_tpcc.fdb'
+          if (Test-Path $fbDb) { Remove-Item $fbDb -Force }
+          Import-Module PSFirebird
+          New-FirebirdDatabase -Database $fbDb -Force
+          $env:FB_DBASE = ($fbDb -replace '\\', '/')
+          # Copy the CI script into the HammerDB tree so paths line up.
+          Copy-Item -Path "${{ github.workspace }}\.github\workflows\scripts\fb_hammerdbcli_ci.tcl" -Destination "$env:HAMMERDB_BIN_ROOT\fb_hammerdbcli_ci.tcl" -Force
+          Push-Location $env:HAMMERDB_BIN_ROOT
+          try {
+            Write-Host "--- HammerDB binary launch ---"
+            Get-ChildItem .\bin -Filter 'tclsh*' | Select-Object Name, Length
+            # hammerdbcli .bat is the Windows launcher
+            $cli = if (Test-Path '.\hammerdbcli.bat') { '.\hammerdbcli.bat' } else { '.\hammerdbcli' }
+            Write-Host "Running: $cli auto fb_hammerdbcli_ci.tcl"
+            & $cli auto fb_hammerdbcli_ci.tcl
+            if ($LASTEXITCODE -ne 0) { throw "hammerdbcli buildschema failed with exit $LASTEXITCODE" }
+          } finally { Pop-Location }
