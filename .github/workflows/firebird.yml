@@ -181,6 +181,14 @@ jobs:
           & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_modules.tcl"
           if ($LASTEXITCODE -ne 0) { throw "Firebird module load failed with exit $LASTEXITCODE" }
 
+      - name: MVCC retry helper unit tests
+        shell: pwsh
+        env:
+          HAMMERDB_ROOT: ${{ github.workspace }}
+        run: |
+          & $env:TCLSH "${{ github.workspace }}\.github\workflows\scripts\fb_retry.tcl"
+          if ($LASTEXITCODE -ne 0) { throw "MVCC retry tests failed with exit $LASTEXITCODE" }
+
       - name: Build TPC-C schema on a fresh embedded .fdb
         shell: pwsh
         env:

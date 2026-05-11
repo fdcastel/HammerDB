@@ -317,6 +317,57 @@ proc fb_exec { stmt params } {
     return
 }
 
+# ---------------------------------------------------------------------
+# MVCC retry helper (C8). Firebird is MVCC and surfaces concurrent-
+# update conflicts as exceptions: "deadlock", "lock conflict on no
+# wait transaction", "update conflicts with concurrent update", or
+# SQLSTATE 40001. The 5 TPC-C transactions wrap their bodies in this
+# helper so a transient conflict triggers an automatic retry with a
+# small randomised back-off, matching the postgres serialization
+# retry pattern.
+# ---------------------------------------------------------------------
+
+proc fb_is_retryable_error { msg } {
+    # Case-insensitive match on the well-known Firebird conflict
+    # markers. Anything else is propagated as a real error.
+    set patterns {
+        deadlock
+        "lock conflict"
+        "update conflict"
+        "concurrent update"
+        "concurrent transaction"
+        "40001"
+        isc_update_conflict
+    }
+    foreach p $patterns {
+        if {[string match -nocase "*$p*" $msg]} { return 1 }
+    }
+    return 0
+}
+
+proc fb_with_retry { max_retries body_var body } {
+    # Run $body up to $max_retries+1 times. On a retryable error, wait
+    # a small randomised back-off then retry. On any other error,
+    # re-raise immediately. body_var is the name of a variable in the
+    # caller's frame that receives the attempt number (0-based) before
+    # each invocation.
+    upvar 1 $body_var attempt
+    for {set attempt 0} {$attempt <= $max_retries} {incr attempt} {
+        if {[catch {uplevel 1 $body} result errdict]} {
+            if {$attempt < $max_retries && [fb_is_retryable_error $result]} {
+                # Back off 5..40 ms before retrying so concurrent VUs
+                # don't lock-step into the same conflict.
+                after [expr {5 + int(rand() * 35)}]
+                continue
+            }
+            # Non-retryable or retries exhausted - propagate.
+            return -options $errdict $result
+        }
+        return $result
+    }
+    error "fb_with_retry: max retries ($max_retries) exceeded"
+}
+
 namespace eval ::fb_loader {
     variable BATCH_SIZE 1000
     # Cached character array used by tpcccommon::MakeAlphaString /
@@ -705,6 +756,8 @@ proc neword { conn w_id w_id_input RAISEERROR fb_storedprocs } {
     set rbk [RandomNumber 1 100]
     set entry_d [fb_iso_ts]
 
+    set max_retries 3
+    for {set attempt 0} {$attempt <= $max_retries} {incr attempt} {
     $conn begintransaction
     if {[catch {
         # Read customer + warehouse (single join, like the spec query)
@@ -826,10 +879,15 @@ proc neword { conn w_id w_id_input RAISEERROR fb_storedprocs } {
         $conn commit
     } err]} {
         catch {$conn rollback}
+        if {$attempt < $max_retries && [fb_is_retryable_error $err]} {
+            after [expr {5 + int(rand() * 35)}]
+            continue
+        }
         if {$RAISEERROR} { error $err }
         return 0
     }
     return 1
+    }
 }
 
 # Payment transaction (TPC-C 2.5)
@@ -852,6 +910,8 @@ proc payment { conn w_id w_id_input RAISEERROR fb_storedprocs } {
     set h_amount [format "%6.2f" [expr {[RandomNumber 100 500000]/100.0}]]
     set h_date [fb_iso_ts]
 
+    set max_retries 3
+    for {set attempt 0} {$attempt <= $max_retries} {incr attempt} {
     $conn begintransaction
     if {[catch {
         fb_dml $conn {
@@ -943,10 +1003,15 @@ proc payment { conn w_id w_id_input RAISEERROR fb_storedprocs } {
         $conn commit
     } err]} {
         catch {$conn rollback}
+        if {$attempt < $max_retries && [fb_is_retryable_error $err]} {
+            after [expr {5 + int(rand() * 35)}]
+            continue
+        }
         if {$RAISEERROR} { error $err }
         return 0
     }
     return 1
+    }
 }
 
 # OrderStatus transaction (TPC-C 2.6) - read-only
@@ -956,6 +1021,8 @@ proc ostat { conn w_id RAISEERROR fb_storedprocs } {
     set y [RandomNumber 1 100]
     set byname [expr {$y <= 60 ? 1 : 0}]
 
+    set max_retries 3
+    for {set attempt 0} {$attempt <= $max_retries} {incr attempt} {
     $conn begintransaction
     if {[catch {
         if {$byname == 1} {
@@ -1004,10 +1071,15 @@ proc ostat { conn w_id RAISEERROR fb_storedprocs } {
         $conn commit
     } err]} {
         catch {$conn rollback}
+        if {$attempt < $max_retries && [fb_is_retryable_error $err]} {
+            after [expr {5 + int(rand() * 35)}]
+            continue
+        }
         if {$RAISEERROR} { error $err }
         return 0
     }
     return 1
+    }
 }
 
 # Delivery transaction (TPC-C 2.7) - iterates 10 districts.
@@ -1017,7 +1089,12 @@ proc delivery { conn w_id RAISEERROR fb_storedprocs } {
     set delivery_d [fb_iso_ts]
 
     if {[catch {
+        # Per-district retry: each district's transaction is retried
+        # independently on Firebird MVCC conflicts so a transient
+        # collision on one district doesn't abort the whole delivery.
         for {set d_id 1} {$d_id <= 10} {incr d_id} {
+            set max_retries 3
+            for {set attempt 0} {$attempt <= $max_retries} {incr attempt} {
             $conn begintransaction
             if {[catch {
                 set noRow [fb_select1 $conn {
@@ -1027,7 +1104,7 @@ proc delivery { conn w_id RAISEERROR fb_storedprocs } {
                 } [dict create w_id $w_id d_id $d_id]]
                 if {$noRow eq ""} {
                     $conn commit
-                    continue
+                    break
                 }
                 set o_id [dict get $noRow NO_O_ID]
                 fb_dml $conn {
@@ -1059,9 +1136,15 @@ proc delivery { conn w_id RAISEERROR fb_storedprocs } {
                     WHERE C_W_ID = :w_id AND C_D_ID = :d_id AND C_ID = :c_id
                 } [dict create amt $total w_id $w_id d_id $d_id c_id $c_id]
                 $conn commit
+                break
             } innerErr]} {
                 catch {$conn rollback}
+                if {$attempt < $max_retries && [fb_is_retryable_error $innerErr]} {
+                    after [expr {5 + int(rand() * 35)}]
+                    continue
+                }
                 error $innerErr
+            }
             }
         }
     } err]} {
@@ -1075,6 +1158,8 @@ proc delivery { conn w_id RAISEERROR fb_storedprocs } {
 proc slev { conn w_id stock_level_d_id RAISEERROR fb_storedprocs } {
     namespace import -force ::tpcccommon::*
     set threshold [RandomNumber 10 20]
+    set max_retries 3
+    for {set attempt 0} {$attempt <= $max_retries} {incr attempt} {
     $conn begintransaction
     if {[catch {
         set distRow [fb_select1 $conn {
@@ -1094,8 +1179,13 @@ proc slev { conn w_id stock_level_d_id RAISEERROR fb_storedprocs } {
         $conn commit
     } err]} {
         catch {$conn rollback}
+        if {$attempt < $max_retries && [fb_is_retryable_error $err]} {
+            after [expr {5 + int(rand() * 35)}]
+            continue
+        }
         if {$RAISEERROR} { error $err }
         return 0
     }
     return 1
+    }
 }
