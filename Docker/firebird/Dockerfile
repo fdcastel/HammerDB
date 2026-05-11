@@ -38,23 +38,23 @@ RUN apt-get update && \
 ARG FB_ODBC_URL="https://github.com/FirebirdSQL/firebird-odbc-driver/releases/download/v3-0-1-release/linux_libs.zip"
 
 RUN set -eux; \
-    mkdir -p /opt/firebird-odbc && \
-    cd /opt/firebird-odbc && \
-    wget -q -O OdbcFb.zip "${FB_ODBC_URL}" && \
-    unzip -j OdbcFb.zip && \
-    rm OdbcFb.zip && \
-    ls -la && \
-    so=$(ls -1 *OdbcFb*.so 2>/dev/null | head -n 1) && \
-    if [ -z "$so" ]; then so=$(ls -1 *.so | head -n 1); fi && \
-    install -m 0755 "$so" /usr/lib/x86_64-linux-gnu/libOdbcFb.so && \
-    printf '%s\n' \
-        '[Firebird ODBC Driver]' \
-        'Description=Firebird ODBC Driver' \
-        'Driver=/usr/lib/x86_64-linux-gnu/libOdbcFb.so' \
-        'Setup=/usr/lib/x86_64-linux-gnu/libOdbcFb.so' \
-        'Threading=1' \
-        'UsageCount=1' \
-        >> /etc/odbcinst.ini && \
+    mkdir -p /opt/firebird-odbc; \
+    cd /opt/firebird-odbc; \
+    wget -q -O OdbcFb.zip "${FB_ODBC_URL}"; \
+    unzip -j OdbcFb.zip; \
+    rm OdbcFb.zip; \
+    ls -la; \
+    so=$(ls -1 *OdbcFb*.so 2>/dev/null | head -n 1); \
+    if [ -z "$so" ]; then so=$(ls -1 *.so | head -n 1); fi; \
+    install -m 0755 "$so" /usr/lib/x86_64-linux-gnu/libOdbcFb.so; \
+    {                                                       \
+        echo "[Firebird ODBC Driver]";                      \
+        echo "Description=Firebird ODBC Driver";            \
+        echo "Driver=/usr/lib/x86_64-linux-gnu/libOdbcFb.so"; \
+        echo "Setup=/usr/lib/x86_64-linux-gnu/libOdbcFb.so";  \
+        echo "Threading=1";                                 \
+        echo "UsageCount=1";                                \
+    } | tee -a /etc/odbcinst.ini; \
     odbcinst -q -d
 
 # Embedded-mode reminder: applications open the .fdb directly via
